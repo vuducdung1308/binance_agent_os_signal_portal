@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Binance Agent OS Signal Portal</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Binance Agent OS Signal Portal</h1>
+    <span class="meta"><span id="wsdot" class="dot"></span> <span id="wsstat">connecting…</span></span>
+    <span class="meta">TF <b id="tf">–</b></span>
+    <span class="meta">poll <span id="pp">–</span>s / <span id="sp">–</span>s</span>
+    <span class="meta">updated <span id="upd">–</span></span>
+    <span class="meta bot-health" id="botHealth" title="Status of the bot's schedulers (from logs)">bot: …</span>
+    <span class="spacer"></span>
+    <button id="btnBell" title="Toggle desktop/sound alerts on new signals">🔕 Alerts</button>
+    <button id="btnCfg">⚙ Alert thresholds</button>
+  </header>
+
+  <div class="layout">
+    <main>
+      <div class="addbar">
+        <input id="addInput" placeholder="Add a coin, e.g. DOGE or PEPEUSDT" autocomplete="off" />
+        <button id="addBtn">+ Add</button>
+        <span id="addMsg" class="meta"></span>
+      </div>
+
+      <div class="controls">
+        <label>Sort
+          <select id="sortSel">
+            <option value="default">Default</option>
+            <option value="change">24h %</option>
+            <option value="rsi">RSI high → low</option>
+            <option value="adx">ADX high → low</option>
+            <option value="signal">Signals first</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="fSignal" /> only coins with a signal / close to one</label>
+        <label><input type="checkbox" id="fAdx" /> only ADX in trade zone (25–35)</label>
+        <label><input type="checkbox" id="fPos" /> holding a position</label>
+        <span class="spacer"></span>
+        <span id="shownCount" class="meta"></span>
+      </div>
+
+      <div id="grid" class="grid"></div>
+    </main>
+
+    <aside class="side">
+      <h2>Recent signals</h2>
+      <div id="feed" class="feed"></div>
+    </aside>
+  </div>
+
+  <div id="modalBg" class="modal-bg">
+    <div class="modal">
+      <button class="close" id="modalClose">✕</button>
+      <h2 id="modalTitle">–</h2>
+      <div id="mini" class="mini"></div>
+      <div id="chart"></div>
+      <p class="hint">Candles include the still-forming bar (for a live chart). Indicators &amp; signals on the dashboard are computed on CLOSED candles — the same basis the bot uses.</p>
+
+      <h2 class="sub">Engine conditions — why a signal did / didn't fire</h2>
+      <div id="diag"></div>
+
+      <h2 class="sub">Order flow <span class="meta">(reference only — not a signal input)</span></h2>
+      <div id="orderflow"><button id="ofBtn">Load order flow</button></div>
+
+      <h2 class="sub">Backtest — test indicator settings
+        <span class="meta">(runs the bot's real engine logic over history, vs. the defaults)</span>
+      </h2>
+      <div id="backtest">
+        <p class="hint">Adjust the settings below, then "Run backtest" — the result shows two columns:
+          <b>Default</b> vs <b>Yours</b>. This is a what-if test, it does NOT change the live bot or portal signals.</p>
+        <div id="btParams"></div>
+        <div class="bt-actions">
+          <label>Days
+            <select id="btDays">
+              <option value="30">30</option>
+              <option value="90" selected>90</option>
+              <option value="180">180</option>
+              <option value="365">365</option>
+            </select>
+          </label>
+          <button id="btBtn">Run backtest</button>
+          <button id="btReset" class="ghost">Reset to defaults</button>
+          <button id="btSave" class="ghost">Save settings for this coin</button>
+          <span id="btMsg" class="meta"></span>
+        </div>
+        <div id="btResult"></div>
+      </div>
+
+      <h2 class="sub">Signal history — <span id="histSym"></span></h2>
+      <div id="hist"></div>
+    </div>
+  </div>
+
+  <div id="cfgBg" class="modal-bg">
+    <div class="modal">
+      <button class="close" id="cfgClose">✕</button>
+      <h2>Alert thresholds (affect dashboard display only)</h2>
+      <p class="hint" id="cfgNote"></p>
+      <div id="cfgBox"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

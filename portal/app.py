@@ -1,0 +1,325 @@
+"""FastAPI app: REST + WebSocket + static frontend, plus the background poller.
+
+Run:  python -m portal.app       (or ./run.sh)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from typing import Dict, List, Optional
+
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from . import bot_bridge as bb
+from .backfill import parse_signals_dir
+from .bot_health import bot_health
+from .market import klines_raw, symbol_exists
+from .poller import Hub, Poller
+from .settings import bot_watchlist, load_portal_settings
+from .store import DEFAULT_ALERT_CONFIG, Store
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+log = logging.getLogger("portal.app")
+
+settings = load_portal_settings()
+store = Store(settings.db_path)
+hub = Hub()
+poller = Poller(settings, store, hub)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    store.seed_alert_defaults()
+    store.seed_watchlist(bot_watchlist(settings.bot_root))
+
+    if not store.has_backfill():
+        rows = parse_signals_dir(bb.BOT_SIGNALS_DIR)
+        if rows:
+            n = store.bulk_insert_backfill(rows)
+            log.info("Backfilled %d historic signals from %s", n, bb.BOT_SIGNALS_DIR)
+
+    pruned = store.prune_snapshots(settings.snapshot_retention_days)
+    if pruned:
+        log.info("Pruned %d old indicator snapshots", pruned)
+
+    hub.seed_spark(store)
+    poller.start()
+    log.info(
+        "Portal up on http://%s:%d  | bot_root=%s tf=%s watch=%s",
+        settings.host, settings.port, settings.bot_root, settings.timeframe,
+        ",".join(store.watchlist_symbols()),
+    )
+    try:
+        yield
+    finally:
+        await poller.stop()
+
+
+app = FastAPI(title="Binance Agent OS Signal Portal", version="1.0", lifespan=lifespan)
+
+
+# ----------------------------- models -----------------------------
+class AddWatch(BaseModel):
+    base: str
+
+
+class ConfigUpdate(BaseModel):
+    scope: str  # "default" or a symbol like "BTCUSDT"
+    values: Dict[str, float]
+
+
+class EngineParamsUpdate(BaseModel):
+    scope: str
+    values: Dict[str, float]
+
+
+class BacktestRequest(BaseModel):
+    days: int = 90
+    params: Optional[Dict[str, float]] = None
+    compare: bool = True
+    use_saved: bool = False
+
+
+# ----------------------------- REST -----------------------------
+@app.get("/api/health")
+async def health() -> dict:
+    return {"ok": True, "timeframe": settings.timeframe,
+            "poll": {"price": settings.price_poll_sec, "signal": settings.signal_poll_sec}}
+
+
+@app.get("/api/state")
+async def get_state() -> dict:
+    """Everything the dashboard needs for a cold load: watchlist, last known
+    price + indicators per symbol (from the hub cache), config, bot positions."""
+    watch = store.get_watchlist()
+    bot_positions = bb.read_bot_open_positions()
+    portal_positions = store.all_portal_positions()
+    coins = []
+    for w in watch:
+        sym = w["symbol"]
+        ind = hub.last_indicators.get(sym)
+        coins.append({
+            "symbol": sym,
+            "base": w["base"],
+            "price": hub.last_price.get(sym),
+            "indicators": ind,
+            "spark": list(hub.spark.get(sym, [])),
+            "bot_position": bot_positions.get(sym),
+            "portal_position": portal_positions.get(sym),
+        })
+    return {
+        "timeframe": settings.timeframe,
+        "engine_defaults": bb.ENGINE_DEFAULTS,
+        "poll": {"price": settings.price_poll_sec, "signal": settings.signal_poll_sec},
+        "watchlist": watch,
+        "coins": coins,
+        "config": store.get_alert_config(),
+        "config_keys": list(DEFAULT_ALERT_CONFIG.keys()),
+        "config_defaults": DEFAULT_ALERT_CONFIG,
+    }
+
+
+@app.get("/api/watchlist")
+async def get_watchlist() -> List[dict]:
+    return store.get_watchlist()
+
+
+@app.post("/api/watchlist")
+async def add_watchlist(body: AddWatch) -> dict:
+    base = body.base.strip().upper()
+    if not base:
+        raise HTTPException(400, "empty base")
+    symbol = base if base.endswith("USDT") else f"{base}USDT"
+    if not await asyncio.to_thread(symbol_exists, symbol):
+        raise HTTPException(404, f"{symbol} not found on Binance")
+    row = store.add_watch(base)
+    return {"added": row, "watchlist": store.get_watchlist()}
+
+
+@app.delete("/api/watchlist/{symbol}")
+async def del_watchlist(symbol: str) -> dict:
+    store.remove_watch(symbol)
+    hub.last_price.pop(symbol.upper(), None)
+    hub.last_indicators.pop(symbol.upper(), None)
+    return {"removed": symbol.upper(), "watchlist": store.get_watchlist()}
+
+
+@app.get("/api/config")
+async def get_config() -> dict:
+    return {
+        "keys": list(DEFAULT_ALERT_CONFIG.keys()),
+        "defaults": DEFAULT_ALERT_CONFIG,
+        "config": store.get_alert_config(),
+        "engine_defaults": bb.ENGINE_DEFAULTS,
+        "note": "These thresholds only drive the portal's dashboard badges/colours. "
+                "The bot's signal engine is unchanged and not configurable here.",
+    }
+
+
+@app.put("/api/config")
+async def put_config(body: ConfigUpdate) -> dict:
+    bad = [k for k in body.values if k not in DEFAULT_ALERT_CONFIG]
+    if bad:
+        raise HTTPException(400, f"unknown keys: {bad}")
+    store.set_alert_config(body.scope, body.values)
+    return {"config": store.get_alert_config()}
+
+
+@app.delete("/api/config/{scope}")
+async def del_config(scope: str) -> dict:
+    store.clear_alert_config(scope)
+    return {"config": store.get_alert_config()}
+
+
+@app.get("/api/signals")
+async def get_signals(symbol: Optional[str] = None, kind: Optional[str] = None,
+                      limit: int = 100) -> List[dict]:
+    limit = max(1, min(limit, 500))
+    return store.recent_signals(limit=limit, symbol=symbol, kind=kind)
+
+
+@app.get("/api/klines/{symbol}")
+async def get_klines(symbol: str, interval: Optional[str] = None, limit: int = 300) -> dict:
+    interval = interval or settings.timeframe
+    limit = max(50, min(limit, 1000))
+    try:
+        raw = await asyncio.to_thread(klines_raw, symbol.upper(), interval, limit)
+    except Exception as exc:
+        raise HTTPException(502, f"binance klines error: {exc}")
+    return {"symbol": symbol.upper(), "interval": interval,
+            "candles": [
+                {"t": r[0] // 1000, "o": r[1], "h": r[2], "l": r[3], "c": r[4], "v": r[5]}
+                for r in raw
+            ]}
+
+
+@app.get("/api/snapshots/{symbol}")
+async def get_snapshots(symbol: str, hours: int = 48) -> dict:
+    hours = max(1, min(hours, 24 * 30))
+    return {"symbol": symbol.upper(),
+            "rows": store.snapshots(symbol.upper(), since_hours=hours)}
+
+
+@app.get("/api/bot-health")
+async def get_bot_health() -> dict:
+    return await asyncio.to_thread(bot_health, settings.bot_root)
+
+
+@app.get("/api/engine-params")
+async def get_engine_params() -> dict:
+    return {
+        "meta": bb.PARAMS_META,
+        "defaults": bb.param_defaults(),
+        "saved": store.get_engine_params(),
+        "note": "For the what-if backtest only. The live bot and portal signals keep "
+                "running the default params — changes here are NOT applied to real trades.",
+    }
+
+
+@app.put("/api/engine-params")
+async def put_engine_params(body: EngineParamsUpdate) -> dict:
+    clean = bb.clean_param_overrides(body.values)
+    store.set_engine_params(body.scope, clean if clean else {})
+    if not clean:  # everything equalled default -> nothing to keep
+        store.clear_engine_params(body.scope)
+    return {"saved": store.get_engine_params()}
+
+
+@app.delete("/api/engine-params/{scope}")
+async def del_engine_params(scope: str) -> dict:
+    store.clear_engine_params(scope)
+    return {"saved": store.get_engine_params()}
+
+
+@app.get("/api/backtest/{symbol}")
+async def get_backtest(symbol: str, days: int = 90) -> dict:
+    """Simple form — engine defaults only."""
+    days = max(14, min(days, 365))
+    try:
+        return await asyncio.to_thread(
+            bb.run_backtest, symbol.upper(), settings.timeframe, days, None, False
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"backtest failed: {exc}")
+
+
+@app.post("/api/backtest/{symbol}")
+async def post_backtest(symbol: str, body: BacktestRequest) -> dict:
+    """What-if form — runs with tuned params (from the body, or the saved set for this
+    symbol when use_saved) and, when compare, also with engine defaults."""
+    days = max(14, min(body.days, 365))
+    overrides = dict(body.params or {})
+    if body.use_saved:
+        overrides = {**store.resolved_engine_params(symbol.upper()), **overrides}
+    try:
+        return await asyncio.to_thread(
+            bb.run_backtest, symbol.upper(), settings.timeframe, days, overrides or None, body.compare
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"backtest failed: {exc}")
+
+
+@app.get("/api/orderflow/{symbol}")
+async def get_orderflow(symbol: str) -> dict:
+    """Taker buy/sell split + order-book bid/ask imbalance, from the bot's own
+    src/order_flow.py (public Binance endpoints). Informational only — the bot
+    deliberately does not feed this into its signal engine, and neither do we."""
+    if bb.get_order_flow_snapshot is None:
+        raise HTTPException(503, "order_flow module unavailable")
+    snap = await asyncio.to_thread(bb.get_order_flow_snapshot, symbol.upper())
+    if snap is None:
+        raise HTTPException(502, "no order-flow data")
+    return {
+        "symbol": symbol.upper(),
+        "taker_buy_pct": snap.taker_buy_pct,
+        "taker_sell_pct": snap.taker_sell_pct,
+        "bid_ask_ratio": snap.bid_ask_ratio,
+    }
+
+
+# ----------------------------- WebSocket -----------------------------
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket) -> None:
+    await ws.accept()
+    await hub.register(ws)
+    try:
+        await ws.send_json(hub.prime_payload())
+        while True:
+            # we don't expect client messages; this keeps the socket alive and
+            # lets us notice a disconnect promptly
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await hub.unregister(ws)
+
+
+# ----------------------------- static frontend -----------------------------
+app.mount("/static", StaticFiles(directory=str(settings.static_dir)), name="static")
+
+
+@app.get("/")
+async def index() -> FileResponse:
+    return FileResponse(str(settings.static_dir / "index.html"))
+
+
+@app.get("/favicon.ico")
+async def favicon() -> Response:
+    return Response(status_code=204)  # empty body — a 204 must not carry content
+
+
+def main() -> None:
+    import uvicorn
+
+    uvicorn.run("portal.app:app", host=settings.host, port=settings.port, reload=False)
+
+
+if __name__ == "__main__":
+    main()

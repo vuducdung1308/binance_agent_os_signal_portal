@@ -1,0 +1,7 @@
+# Portal only. The bot modules we import (src/price_data, src/signal_engine,
+# src/indicators, src/price_watch, src/order_flow, src/config) need just requests +
+# python-dotenv, both listed below.
+fastapi>=0.110,<0.116
+uvicorn[standard]>=0.27
+requests>=2.31
+python-dotenv>=1.0
