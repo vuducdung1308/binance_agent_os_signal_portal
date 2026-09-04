@@ -46,7 +46,11 @@ class PortalSettings:
 
 
 def load_portal_settings() -> PortalSettings:
-    bot_root = Path(os.environ.get("BOT_ROOT", "/Users/aaa/Binansquare")).expanduser()
+    # Defaults to the copy of the bot's engine bundled in this repo (./bot). Point it
+    # at your own full Binansquare checkout with BOT_ROOT to track live positions/history.
+    bot_root = Path(
+        os.environ.get("BOT_ROOT", str(PORTAL_ROOT / "bot"))
+    ).expanduser().resolve()
 
     # Pull the bot's configured timeframe as the default (its .env, read directly —
     # importing src.config would also work but this avoids its load_dotenv side effects).

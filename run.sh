@@ -15,7 +15,7 @@ source "$VENV/bin/activate"
 
 pip install -q -r requirements.txt
 
-export BOT_ROOT="${BOT_ROOT:-/Users/aaa/Binansquare}"
+export BOT_ROOT="${BOT_ROOT:-$(pwd)/bot}"
 export PORTAL_HOST="${PORTAL_HOST:-127.0.0.1}"
 export PORTAL_PORT="${PORTAL_PORT:-8777}"
 

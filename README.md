@@ -91,8 +91,6 @@ fast loop for the real‑time feel.
 
 - **Python 3.9+** (developed and tested on 3.9.6; the code uses
   `from __future__ import annotations` so 3.9 is fine).
-- **A checkout of the Binansquare bot** (see next section). The portal cannot run without
-  it — it imports the bot's engine.
 - **macOS or Linux** for `run.sh` (`lsof`). Windows: run `python -m portal.app` directly.
 - **`launchctl`** is macOS‑only and used purely for the bot‑health strip; on Linux/Windows
   that strip degrades gracefully to log‑mtime.
@@ -103,8 +101,19 @@ fast loop for the real‑time feel.
 
 ## The bot dependency (`BOT_ROOT` contract)
 
-The portal imports from and reads files under `BOT_ROOT`. To replicate against your own
-bot, expose the same surface:
+**A copy of the bot's engine ships in [`bot/`](bot/)**, so `git clone` + `./run.sh` works
+with nothing else installed. `BOT_ROOT` defaults to `./bot`.
+
+Point `BOT_ROOT` at your **own full Binansquare checkout** to also see its live paper
+positions (`data/open_positions.json`) and pick up new signals it writes
+(`output/signals/*.txt`). The bundled copy has neither, so those two panels stay empty —
+everything else (indicators, engine diagnostics, order flow, backtest) works fully.
+
+The bundled `bot/` contains only the pure‑logic modules the portal imports — no Telegram
+tokens, no API keys, none of the bot's other pipelines. It can drift from the upstream
+bot; treat it as a pinned snapshot.
+
+Whatever you point `BOT_ROOT` at must expose this surface:
 
 **Python modules** (`<BOT_ROOT>` must be importable; it needs a `src/` package):
 
@@ -134,14 +143,13 @@ the rest of the portal works.
 ## Quick start
 
 ```bash
-git clone <this-repo> binance-agent-os-signal-portal
-cd binance-agent-os-signal-portal
-cp .env.example .env
-$EDITOR .env                 # set BOT_ROOT to your Binansquare checkout
+git clone https://github.com/vuducdung1308/binance_agent_os_signal_portal.git
+cd binance_agent_os_signal_portal
 ./run.sh                     # creates .venv, installs deps, starts on :8777
 ```
 
-Open <http://127.0.0.1:8777>.
+Open <http://127.0.0.1:8777>. The bot's engine is bundled in `bot/`, so there is nothing
+else to install or configure.
 
 ---
 
@@ -150,28 +158,32 @@ Open <http://127.0.0.1:8777>.
 ### 1. Get the code
 
 ```bash
-git clone git@github.com:vuducdung1308/binance_agent_os_signal_portal.git
-cd binance-agent-os-signal-portal
+git clone https://github.com/vuducdung1308/binance_agent_os_signal_portal.git
+# or, with an SSH key configured:
+# git clone git@github.com:vuducdung1308/binance_agent_os_signal_portal.git
+cd binance_agent_os_signal_portal
 ```
 
 Starting from a bare copy of these files instead of a clone? Initialise the repo yourself:
 
 ```bash
-cd binance-agent-os-signal-portal
 git init
 git add .
 git commit -m "chore: import Binance Agent OS Signal Portal"
 ```
 
-`.gitignore` already excludes `.venv/`, `data/portal.db*`, `.env`, `__pycache__/`, and
-`.DS_Store`, so the working tree is safe to commit as‑is (no secrets, no build output).
+`.gitignore` already excludes `.venv/`, `data/portal.db*`, `.env`, `__pycache__/`,
+`.DS_Store`, and the bundled bot's runtime output, so the working tree is safe to commit
+as‑is (no secrets, no build output).
 
-### 2. Get the bot it visualises
+### 2. (Optional) Point it at your own bot
 
-Clone / copy the **Binansquare** bot somewhere on the same machine. Note its absolute
-path — that is your `BOT_ROOT`. Make sure it has been run at least once so
-`output/signals/` and `data/` exist (they may be empty). The portal does **not** need the
-bot's virtualenv or its API keys.
+Skip this to use the bundled engine in `bot/`.
+
+To visualise your **own** Binansquare checkout instead — and see its live paper positions
+and new signals — set `BOT_ROOT` to its absolute path (in `.env` or the environment). It
+must satisfy the [contract above](#the-bot-dependency-bot_root-contract). It does **not**
+need the bot's virtualenv or API keys.
 
 ### 3. Create the environment
 
@@ -183,26 +195,27 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-`requirements.txt` is just `fastapi`, `uvicorn[standard]`, `requests`, `python-dotenv`.
-The bot modules the portal imports only need `requests` + `python-dotenv`, already
-included.
+`requirements.txt` is just `fastapi`, `uvicorn[standard]`, `requests`, `python-dotenv` —
+the bundled bot modules need nothing beyond `requests` + `python-dotenv`.
 
-### 4. Configure
+### 4. (Optional) Configure
+
+Every setting has a working default. To change any of them:
 
 ```bash
 cp .env.example .env
+$EDITOR .env
 ```
 
-Edit `.env` and set **`BOT_ROOT`** to the absolute path from step 2. Everything else has a
-working default — see [Configuration reference](#configuration-reference). Environment
-variables also work and take precedence over `.env`.
+See [Configuration reference](#configuration-reference). Environment variables also work
+and take precedence over `.env`.
 
 ### 5. Run
 
 ```bash
 ./run.sh
 # or, without the launcher:
-BOT_ROOT=/abs/path/to/Binansquare python -m portal.app
+python -m portal.app
 ```
 
 `run.sh` also kills any stale process still holding `PORTAL_PORT` before starting (a
@@ -214,9 +227,10 @@ On the first startup the portal will:
 
 1. Create `data/portal.db` and its schema.
 2. Seed `alert_config` with the default display thresholds.
-3. Seed the `watchlist` from the bot's `SIGNAL_COINS` (`.env`), falling back to
-   `BTC,ETH,BNB,ADA,SOL,LTC`.
-4. Backfill `signal_event` from every parseable `output/signals/*.txt`.
+3. Seed the `watchlist` from `<BOT_ROOT>/.env` `SIGNAL_COINS` (bundled bot →
+   `BTC,ETH,BNB,ADA,SOL,LTC`).
+4. Backfill `signal_event` from every parseable `<BOT_ROOT>/output/signals/*.txt`
+   (none with the bundled bot — that folder is empty).
 5. Prune `indicator_snapshot` rows older than the retention window (none yet).
 6. Start the two poll loops.
 
@@ -263,12 +277,11 @@ In the browser, the connection dot should be **live**, cards should fill in with
 
 ## Configuration reference
 
-All optional except `BOT_ROOT`. Set via `.env` in the project root or as environment
-variables (env wins).
+All optional. Set via `.env` in the project root or as environment variables (env wins).
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `BOT_ROOT` | `/Users/aaa/Binansquare` | Absolute path to the Binansquare bot. **Change this.** |
+| `BOT_ROOT` | `./bot` | Path to the bot's engine. Bundled copy by default; set to your own Binansquare checkout to also show its live positions/signals. |
 | `PORTAL_HOST` | `127.0.0.1` | Bind address. |
 | `PORTAL_PORT` | `8777` | Bind port. |
 | `PORTAL_PRICE_POLL_SEC` | `5` | Live price/volume refresh interval. |
@@ -331,8 +344,9 @@ rebuilt on the next launch.
 
 ## Changes made to the bot
 
-The portal started fully non‑invasive. Making the **Backtest tab test different indicator
-settings** required parameterising the engine, done in a strictly backward‑compatible way:
+The bundled `bot/` already contains the parameterised engine. If you point `BOT_ROOT` at
+your own Binansquare checkout, it needs the same two changes — made in a strictly
+backward‑compatible way so the live bot is byte‑for‑byte unaffected:
 
 | File | Change |
 |---|---|
@@ -341,11 +355,11 @@ settings** required parameterising the engine, done in a strictly backward‑com
 
 **Every existing caller** (`main_signals.py`, the schedulers, `python backtest.py BTC
 --days N`) passes nothing → identical behaviour. Verified: `python backtest.py BTC --days
-45` produces **byte‑identical** output before and after. Backups are kept alongside the
-originals as `src/signal_engine.py.pre-params.bak` and `backtest.py.pre-params.bak`.
+45` produces **byte‑identical** output before and after. In the upstream bot the pre‑change
+files are kept as `src/signal_engine.py.pre-params.bak` and `backtest.py.pre-params.bak`.
 
 The **live bot always uses `DEFAULT_PARAMS`.** Tuned params only reach the what‑if
-backtest.
+backtest — never the live engine or the portal's own paper positions.
 
 ---
 
@@ -366,6 +380,12 @@ backtest.
 │   ├── index.html      # single page, no framework
 │   ├── app.js          # dashboard, WS client, modal, backtest form
 │   └── style.css
+├── bot/                # bundled snapshot of the bot's engine (BOT_ROOT default)
+│   ├── src/            # indicators, price_data, price_watch, signal_engine, order_flow
+│   ├── backtest.py
+│   ├── .env            # SIGNAL_COINS + SIGNAL_TIMEFRAME only (no secrets)
+│   ├── data/           # empty — a real checkout has open_positions.json here
+│   └── output/signals/ # empty — a real checkout has the bot's *.txt drafts here
 ├── data/               # portal.db is created here at runtime
 ├── requirements.txt
 ├── run.sh              # venv + install + free-the-port + launch
@@ -401,8 +421,9 @@ If `launchctl` is available the strip uses that instead. `🟡` = "can't confirm
 still available via `/api/klines/{symbol}`.
 
 **`ModuleNotFoundError: No module named 'src'`.**
-`BOT_ROOT` is wrong or the bot checkout has no importable `src/` package. Print the
-resolved path: `python -c "from portal.settings import load_portal_settings as f; print(f().bot_root)"`.
+A custom `BOT_ROOT` is wrong or has no importable `src/` package. Print the resolved
+path: `python -c "from portal.settings import load_portal_settings as f; print(f().bot_root)"`.
+Unset `BOT_ROOT` to fall back to the bundled `bot/`.
 
 **Everything imports but no signals ever appear.**
 Expected if none of the watchlist coins currently meet the engine's entry conditions.

@@ -4,4 +4,13 @@ __pycache__/
 data/portal.db
 data/portal.db-*
 .env
+
+# bundled bot: keep the code + its secret-free .env + folder structure, drop runtime output
+!bot/.env
+bot/data/*
+!bot/data/.gitkeep
+bot/output/signals/*
+!bot/output/signals/.gitkeep
+bot/logs/
+
 .DS_Store
