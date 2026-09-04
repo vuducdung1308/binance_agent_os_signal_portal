@@ -150,7 +150,7 @@ Open <http://127.0.0.1:8777>.
 ### 1. Get the code
 
 ```bash
-git clone <this-repo> binance-agent-os-signal-portal
+git clone git@github.com:vuducdung1308/binance_agent_os_signal_portal.git
 cd binance-agent-os-signal-portal
 ```
 
