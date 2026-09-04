@@ -72,13 +72,13 @@ function _ageStr(s) {
 async function refreshBotHealth() {
   try {
     const h = await fetch("/api/bot-health").then((r) => r.json());
-    const dot = { ok: "🟢", idle: "🟡", down: "🔴", crashed: "🔴", unknown: "⚪" };
+    const dot = { ok: "🟢", warn: "🟡", idle: "🟡", down: "🔴", crashed: "🔴", unknown: "⚪" };
     const parts = Object.entries(h.agents).map(([name, a]) => `${dot[a.status] || "⚪"}${name}`);
     const el = $("#botHealth");
     el.textContent = "bot: " + parts.join(" ");
     el.title =
       "Bot schedulers (source: launchctl, falls back to log mtime)\n" +
-      "🟢 running OK · 🟡 can't confirm (log hasn't moved in a while) · 🔴 down/crashed · ⚪ unknown\n\n" +
+      "🟢 running OK · 🟡 running, but the last run ended badly / can't confirm · 🔴 not running · ⚪ unknown\n\n" +
       Object.entries(h.agents)
         .map(([n, a]) => {
           const lc = a.launchctl

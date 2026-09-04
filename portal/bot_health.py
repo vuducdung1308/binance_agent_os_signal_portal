@@ -26,6 +26,11 @@ _AGENTS = {
     "hotmovers": ("scheduler_hot_movers.log", 6 * 3600),
 }
 
+# launchctl's "last exit" as -N means the previous run was killed by signal N. These are
+# "please stop" signals — they fire on `launchctl unload`/reload, logout, and reboot, and
+# a KeepAlive agent just restarts. Not a crash.
+_STOP_SIGNALS = {"-1", "-2", "-3", "-15"}  # SIGHUP, SIGINT, SIGQUIT, SIGTERM
+
 
 def _launchctl() -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
@@ -62,12 +67,18 @@ def bot_health(bot_root: Path) -> Dict[str, Any]:
 
         entry = lc.get(name)
         if entry is not None:
+            last = str(entry["last_exit"])
             if not entry["running"]:
-                status = "down"          # loaded but not running
-            elif entry["last_exit"] not in ("0", "-"):
-                status = "crashed"       # running now, but last run exited non-zero
-            else:
+                status = "down"          # loaded but not running right now
+            elif last in ("0", "-") or last in _STOP_SIGNALS:
+                # running now; last run either exited cleanly or was told to stop
+                # (SIGTERM/SIGINT/... — normal on unload/reload/reboot, KeepAlive
+                # brought it back). Not a crash.
                 status = "ok"
+            else:
+                # running now, but the previous run died on a crash signal or a
+                # non-zero code — flag it amber, not red.
+                status = "warn"
             source = "launchctl"
         elif age is None:
             status, source = "unknown", "none"
@@ -81,8 +92,10 @@ def bot_health(bot_root: Path) -> Dict[str, Any]:
             "launchctl": entry,
         }
 
-    if any(a["status"] in ("down", "crashed") for a in agents.values()):
+    if any(a["status"] == "down" for a in agents.values()):
         overall = "problem"
+    elif any(a["status"] in ("warn", "idle") for a in agents.values()):
+        overall = "warn"
     elif all(a["status"] == "unknown" for a in agents.values()):
         overall = "unknown"
     else:
