@@ -23,6 +23,13 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _bool(name: str, default: bool) -> bool:
+    v = os.environ.get(name, "").strip().lower()
+    if not v:
+        return default
+    return v in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class PortalSettings:
     bot_root: Path
@@ -43,6 +50,13 @@ class PortalSettings:
     snapshot_retention_days: int
     timeframe: str
     klines_limit: int
+    # Telegram push for portal-detected signals. Both must be set to enable it.
+    # Kept separate from the bot's own TELEGRAM_* so you can use a different bot/chat.
+    telegram_bot_token: str
+    telegram_chat_id: str
+    # Also push signals the portal ingested from the bot's output/signals/*.txt.
+    # Leave false when BOT_ROOT points at a real bot that already sends its own.
+    telegram_include_bot_signals: bool
 
 
 def load_portal_settings() -> PortalSettings:
@@ -70,6 +84,9 @@ def load_portal_settings() -> PortalSettings:
         snapshot_retention_days=_int("PORTAL_SNAPSHOT_RETENTION_DAYS", 30),
         timeframe=timeframe,
         klines_limit=_int("PORTAL_KLINES_LIMIT", 300),
+        telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
+        telegram_include_bot_signals=_bool("PORTAL_TELEGRAM_INCLUDE_BOT", False),
     )
 
 

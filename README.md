@@ -49,7 +49,7 @@ WebSocket, and keeps its own history in SQLite. The bot keeps running exactly as
 | **Backtest** | Runs the bot's real `backtest.py` over history. Edit indicator settings (ADX gate, RSI bands, ATR multiples, look‑backs, EMA/periods, SHORT toggle) and compare **Default vs Yours** side by side. Save a tuned set per coin. What‑if only — never applied to live trades. |
 | **Signal history** | Every entry/exit kept in SQLite indefinitely. Backfilled from the bot's `output/signals/*.txt` on first run, then kept in sync every scan. |
 | **Bot health** | Header strip showing each bot scheduler's state, from `launchctl` (falls back to log‑file mtime). |
-| **Notifications** | Optional desktop notification + sound on a new signal. |
+| **Notifications** | Optional desktop notification + sound on a new signal, and optional Telegram push (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`) for every signal the portal detects. |
 
 ---
 
@@ -272,6 +272,11 @@ In the browser, the connection dot should be **live**, cards should fill in with
 - **WebSocket.** On connect, the client is primed with the last known price + indicator
   payload per symbol; thereafter it receives `price_batch`, `indicators`, and `signal`
   messages. Reconnects automatically with backoff.
+- **Telegram.** If `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` are set, every new `signal`
+  event is also pushed to that chat (best‑effort, never blocks the loop). The first
+  signal‑loop pass only seeds state — it does not notify the backlog — so you only get
+  messages for signals that fire *after* startup. `POST /api/telegram-test` verifies the
+  wiring.
 
 ---
 
@@ -291,6 +296,9 @@ All optional. Set via `.env` in the project root or as environment variables (en
 | `PORTAL_TIMEFRAME` | *(inherits `SIGNAL_TIMEFRAME` from the bot, else `1h`)* | Candle timeframe. |
 | `PORTAL_KLINES_LIMIT` | `300` | Candles fetched per symbol per scan (must exceed slow EMA + warm‑up). |
 | `PORTAL_DB` | `./data/portal.db` | SQLite file path. |
+| `TELEGRAM_BOT_TOKEN` | *(none)* | Set with `TELEGRAM_CHAT_ID` to push a message for every signal the portal detects. Separate from the bot's own `TELEGRAM_*`. |
+| `TELEGRAM_CHAT_ID` | *(none)* | Target chat for the push. |
+| `PORTAL_TELEGRAM_INCLUDE_BOT` | `false` | Also push signals ingested from the bot's `output/signals/*.txt`. Leave off when `BOT_ROOT` is a real bot that already sends its own. |
 | `PYTHON` | `python3` | Interpreter `run.sh` uses to create `.venv`. |
 
 ---
@@ -319,6 +327,7 @@ Base URL `http://127.0.0.1:8777`.
 | `GET` | `/api/snapshots/{symbol}?hours=48` | Stored indicator time series. |
 | `GET` | `/api/orderflow/{symbol}` | Taker buy/sell split + bid/ask ratio. |
 | `GET` | `/api/bot-health` | Per‑scheduler status from `launchctl` / log mtime. |
+| `POST` | `/api/telegram-test` | Send a test message to the configured chat. |
 | `WS` | `/ws` | `prime`, then `price_batch` / `indicators` / `signal`. |
 | `GET` | `/` , `/static/*` | Frontend. |
 

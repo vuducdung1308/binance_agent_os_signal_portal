@@ -54,6 +54,11 @@ async def lifespan(_app: FastAPI):
         settings.host, settings.port, settings.bot_root, settings.timeframe,
         ",".join(store.watchlist_symbols()),
     )
+    log.info(
+        "Telegram: %s",
+        f"ON (chat {settings.telegram_chat_id})" if poller.telegram.enabled
+        else "OFF (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID to enable)",
+    )
     try:
         yield
     finally:
@@ -208,6 +213,18 @@ async def get_snapshots(symbol: str, hours: int = 48) -> dict:
 @app.get("/api/bot-health")
 async def get_bot_health() -> dict:
     return await asyncio.to_thread(bot_health, settings.bot_root)
+
+
+@app.post("/api/telegram-test")
+async def telegram_test() -> dict:
+    if not poller.telegram.enabled:
+        raise HTTPException(400, "Telegram not configured (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)")
+    ok = await asyncio.to_thread(
+        poller.telegram.send, "✅ Crypto Signal Portal — Telegram test. Signal alerts are on."
+    )
+    if not ok:
+        raise HTTPException(502, "Telegram rejected the message — check the token / chat id")
+    return {"sent": True, "chat_id": settings.telegram_chat_id}
 
 
 @app.get("/api/engine-params")

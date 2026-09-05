@@ -25,6 +25,7 @@ from typing import Any, Deque, Dict, List, Optional, Set
 
 from . import bot_bridge as bb
 from .market import ticker_24hr
+from .notify import Telegram, format_signal
 from .settings import PortalSettings
 from .store import Store
 
@@ -145,6 +146,10 @@ class Poller:
         self.hub = hub
         self._tasks: List[asyncio.Task] = []
         self._last_snapshot_at: Dict[str, float] = {}
+        self.telegram = Telegram(settings.telegram_bot_token, settings.telegram_chat_id)
+        # First signal-loop pass only seeds state — don't Telegram the backlog. Armed
+        # once the first full pass finishes; genuinely new signals after that notify.
+        self._notify_armed = False
 
     def start(self) -> None:
         self._tasks = [
@@ -198,11 +203,27 @@ class Poller:
                     except Exception:
                         log.exception("signal loop error for %s", sym)
                     await asyncio.sleep(0.15)  # gentle pacing between symbols
+                if not self._notify_armed:
+                    self._notify_armed = True
+                    if self.telegram.enabled:
+                        log.info("Telegram notifications armed (chat %s)", self.s.telegram_chat_id)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("signal loop error")
             await asyncio.sleep(self.s.signal_poll_sec)
+
+    async def _emit_signal(self, ev: dict) -> None:
+        """Broadcast a new signal to the browsers and, when configured, to Telegram."""
+        await self.hub.broadcast({"type": "signal", "event": ev, "ts": _now()})
+        if not (self._notify_armed and self.telegram.enabled):
+            return
+        if ev.get("source") == "bot" and not self.s.telegram_include_bot_signals:
+            return
+        try:
+            await asyncio.to_thread(self.telegram.send, format_signal(ev))
+        except Exception:
+            log.exception("telegram notify failed")
 
     async def _ingest_bot_signals(self) -> None:
         """Pick up entries/exits the bot itself wrote to output/signals/*.txt after the
@@ -218,7 +239,7 @@ class Poller:
             log.exception("bot-signal ingest failed")
             return
         for ev in new:
-            await self.hub.broadcast({"type": "signal", "event": ev, "ts": _now()})
+            await self._emit_signal(ev)
 
     async def _process_symbol(self, symbol: str, bot_position: Optional[dict]) -> None:
         candles = await asyncio.to_thread(
@@ -290,7 +311,7 @@ class Poller:
         self.hub.last_indicators[symbol] = payload
         await self.hub.broadcast(payload)
         for ev in new_events:
-            await self.hub.broadcast({"type": "signal", "event": ev, "ts": _now()})
+            await self._emit_signal(ev)
 
     # ---------- signal_event dedup + insert ----------
     def _record_entry(self, symbol: str, sig: dict, snap: dict) -> Optional[dict]:
