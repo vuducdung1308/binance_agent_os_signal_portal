@@ -93,6 +93,65 @@ CREATE TABLE IF NOT EXISTS portal_position (
     tp1_hit       INTEGER NOT NULL DEFAULT 0,
     opened_at     TEXT NOT NULL
 );
+
+-- ================= live trading (spot, via the Binance Agent OS MCP) =================
+-- A single mutable row of day-scoped counters + the manual kill switch.
+CREATE TABLE IF NOT EXISTS trading_state (
+    id                      INTEGER PRIMARY KEY CHECK (id = 1),
+    day                     TEXT NOT NULL,           -- UTC YYYY-MM-DD the counters belong to
+    killed                  INTEGER NOT NULL DEFAULT 0,
+    daily_loss_tripped      INTEGER NOT NULL DEFAULT 0,
+    orders_today            INTEGER NOT NULL DEFAULT 0,
+    realized_pnl_today_usdt REAL NOT NULL DEFAULT 0
+);
+
+-- One open spot position per symbol (mirrors what the portal itself opened).
+CREATE TABLE IF NOT EXISTS live_position (
+    symbol         TEXT PRIMARY KEY,
+    mode           TEXT NOT NULL,          -- 'dry-run' | 'live'
+    base_qty       REAL NOT NULL,          -- base asset held
+    entry_px       REAL NOT NULL,          -- effective fill (estimate in dry-run)
+    quote_spent    REAL NOT NULL,          -- USDT committed
+    stop_loss      REAL,
+    take_profit    REAL,
+    open_order_id  TEXT,
+    opened_at      TEXT NOT NULL
+);
+
+-- Closed round-trips, for realised P/L history.
+CREATE TABLE IF NOT EXISTS live_trade (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol         TEXT NOT NULL,
+    mode           TEXT NOT NULL,
+    base_qty       REAL NOT NULL,
+    entry_px       REAL NOT NULL,
+    exit_px        REAL NOT NULL,
+    quote_in       REAL NOT NULL,          -- USDT spent opening
+    quote_out      REAL NOT NULL,          -- USDT received closing
+    realized_pnl   REAL NOT NULL,          -- quote_out - quote_in
+    open_order_id  TEXT,
+    close_order_id TEXT,
+    opened_at      TEXT NOT NULL,
+    closed_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_live_trade_closed ON live_trade(closed_at DESC);
+
+-- Every execution-agent call, for audit.
+CREATE TABLE IF NOT EXISTS agent_call (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    intent      TEXT NOT NULL,             -- 'OPEN' | 'CLOSE'
+    symbol      TEXT NOT NULL,
+    mode        TEXT NOT NULL,
+    status      TEXT NOT NULL,             -- dry-run|executed|no-op|blocked|refused|error
+    model       TEXT,
+    stop_reason TEXT,
+    tool_calls  TEXT,                      -- JSON
+    text        TEXT,
+    error       TEXT,
+    guardrail   TEXT                       -- JSON {ok, reasons[]}
+);
+CREATE INDEX IF NOT EXISTS idx_agent_call_ts ON agent_call(ts DESC);
 """
 
 
@@ -409,3 +468,118 @@ class Store:
         with _LOCK:
             self.db.execute("DELETE FROM portal_position WHERE symbol = ?", (symbol,))
             self.db.commit()
+
+    # ================= live trading =================
+    def trading_state(self) -> dict:
+        """Single row, with lazy UTC-day rollover of the counters."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with _LOCK:
+            row = self.db.execute("SELECT * FROM trading_state WHERE id = 1").fetchone()
+            if row is None:
+                self.db.execute(
+                    "INSERT INTO trading_state (id, day, killed, daily_loss_tripped, orders_today, realized_pnl_today_usdt) "
+                    "VALUES (1, ?, 0, 0, 0, 0)", (today,),
+                )
+                self.db.commit()
+                row = self.db.execute("SELECT * FROM trading_state WHERE id = 1").fetchone()
+            d = dict(row)
+            if d["day"] != today:
+                self.db.execute(
+                    "UPDATE trading_state SET day = ?, daily_loss_tripped = 0, orders_today = 0, "
+                    "realized_pnl_today_usdt = 0 WHERE id = 1", (today,),
+                )
+                self.db.commit()
+                d.update(day=today, daily_loss_tripped=0, orders_today=0, realized_pnl_today_usdt=0.0)
+        d["killed"] = bool(d["killed"])
+        d["daily_loss_tripped"] = bool(d["daily_loss_tripped"])
+        return d
+
+    def set_kill_switch(self, on: bool) -> None:
+        self.trading_state()  # ensure row + rollover
+        with _LOCK:
+            self.db.execute("UPDATE trading_state SET killed = ? WHERE id = 1", (1 if on else 0,))
+            self.db.commit()
+
+    def record_order_counter(self, realized_pnl_delta: float, daily_loss_limit: float) -> None:
+        self.trading_state()
+        with _LOCK:
+            self.db.execute(
+                "UPDATE trading_state SET orders_today = orders_today + 1, "
+                "realized_pnl_today_usdt = realized_pnl_today_usdt + ? WHERE id = 1",
+                (realized_pnl_delta,),
+            )
+            row = self.db.execute(
+                "SELECT realized_pnl_today_usdt FROM trading_state WHERE id = 1"
+            ).fetchone()
+            if row["realized_pnl_today_usdt"] <= -abs(daily_loss_limit):
+                self.db.execute("UPDATE trading_state SET daily_loss_tripped = 1 WHERE id = 1")
+            self.db.commit()
+
+    def live_positions(self) -> Dict[str, dict]:
+        with _LOCK:
+            rows = self.db.execute("SELECT * FROM live_position").fetchall()
+        return {r["symbol"]: dict(r) for r in rows}
+
+    def get_live_position(self, symbol: str) -> Optional[dict]:
+        with _LOCK:
+            row = self.db.execute(
+                "SELECT * FROM live_position WHERE symbol = ?", (symbol,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def open_live_position(self, *, symbol: str, mode: str, base_qty: float, entry_px: float,
+                           quote_spent: float, stop_loss: Optional[float],
+                           take_profit: Optional[float], open_order_id: Optional[str]) -> None:
+        with _LOCK:
+            self.db.execute(
+                "INSERT OR REPLACE INTO live_position "
+                "(symbol, mode, base_qty, entry_px, quote_spent, stop_loss, take_profit, open_order_id, opened_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (symbol, mode, base_qty, entry_px, quote_spent, stop_loss, take_profit,
+                 open_order_id, _now()),
+            )
+            self.db.commit()
+
+    def close_live_position(self, *, symbol: str, exit_px: float, quote_out: float,
+                            close_order_id: Optional[str]) -> Optional[dict]:
+        pos = self.get_live_position(symbol)
+        if pos is None:
+            return None
+        realized = quote_out - pos["quote_spent"]
+        with _LOCK:
+            self.db.execute(
+                "INSERT INTO live_trade (symbol, mode, base_qty, entry_px, exit_px, quote_in, quote_out, "
+                "realized_pnl, open_order_id, close_order_id, opened_at, closed_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (symbol, pos["mode"], pos["base_qty"], pos["entry_px"], exit_px, pos["quote_spent"],
+                 quote_out, realized, pos["open_order_id"], close_order_id, pos["opened_at"], _now()),
+            )
+            self.db.execute("DELETE FROM live_position WHERE symbol = ?", (symbol,))
+            self.db.commit()
+        return {"realized_pnl": realized, "quote_in": pos["quote_spent"], "quote_out": quote_out}
+
+    def recent_trades(self, limit: int = 50) -> List[dict]:
+        with _LOCK:
+            rows = self.db.execute(
+                "SELECT * FROM live_trade ORDER BY closed_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def insert_agent_call(self, **kw) -> int:
+        cols = ["ts", "intent", "symbol", "mode", "status", "model", "stop_reason",
+                "tool_calls", "text", "error", "guardrail"]
+        kw.setdefault("ts", _now())
+        with _LOCK:
+            cur = self.db.execute(
+                f"INSERT INTO agent_call ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                [kw.get(c) for c in cols],
+            )
+            self.db.commit()
+            return cur.lastrowid
+
+    def recent_agent_calls(self, limit: int = 30) -> List[dict]:
+        with _LOCK:
+            rows = self.db.execute(
+                "SELECT * FROM agent_call ORDER BY ts DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]

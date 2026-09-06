@@ -22,6 +22,7 @@ from .market import klines_raw, symbol_exists
 from .poller import Hub, Poller
 from .settings import bot_watchlist, load_portal_settings
 from .store import DEFAULT_ALERT_CONFIG, Store
+from .trading import TradingService, load_trading_config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("portal.app")
@@ -30,6 +31,14 @@ settings = load_portal_settings()
 store = Store(settings.db_path)
 hub = Hub()
 poller = Poller(settings, store, hub)
+
+
+def _mark_price(symbol: str):
+    row = hub.last_price.get(symbol.upper())
+    return row.get("price") if row else None
+
+
+trading = TradingService(load_trading_config(), store, _mark_price)
 
 
 @asynccontextmanager
@@ -58,6 +67,14 @@ async def lifespan(_app: FastAPI):
         "Telegram: %s",
         f"ON (chat {settings.telegram_chat_id})" if poller.telegram.enabled
         else "OFF (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID to enable)",
+    )
+    tc = trading.cfg
+    log.info(
+        "Trading: mode=%s  live_ready=%s  model=%s  limits=%sUSDT/order, %s/day, -%sUSDT/day, %s pos%s",
+        tc.mode, tc.live_ready, tc.anthropic_model,
+        tc.limits.max_notional_per_order_usdt, tc.limits.max_orders_per_day,
+        tc.limits.daily_loss_limit_usdt, tc.limits.max_open_positions,
+        "  [KILL_SWITCH env ON]" if tc.env_kill_switch else "",
     )
     try:
         yield
@@ -88,6 +105,17 @@ class BacktestRequest(BaseModel):
     params: Optional[Dict[str, float]] = None
     compare: bool = True
     use_saved: bool = False
+
+
+class OrderRequest(BaseModel):
+    symbol: str
+    intent: str  # "OPEN" | "CLOSE"
+    notional_usdt: Optional[float] = None
+    confirm: bool = False  # the UI's explicit-confirm gate; must be true
+
+
+class KillSwitchRequest(BaseModel):
+    on: bool
 
 
 # ----------------------------- REST -----------------------------
@@ -213,6 +241,30 @@ async def get_snapshots(symbol: str, hours: int = 48) -> dict:
 @app.get("/api/bot-health")
 async def get_bot_health() -> dict:
     return await asyncio.to_thread(bot_health, settings.bot_root)
+
+
+@app.get("/api/trading/status")
+async def trading_status() -> dict:
+    return await asyncio.to_thread(trading.status)
+
+
+@app.post("/api/trading/order")
+async def trading_order(body: OrderRequest) -> dict:
+    if not body.confirm:
+        raise HTTPException(400, "confirm must be true (the placement is confirmed in the UI first)")
+    if body.intent.upper() not in ("OPEN", "CLOSE"):
+        raise HTTPException(400, "intent must be OPEN or CLOSE")
+    res = await asyncio.to_thread(
+        trading.place, body.symbol, body.intent, body.notional_usdt
+    )
+    if res.get("status") == "error":
+        raise HTTPException(502, res.get("error", "order failed"))
+    return res
+
+
+@app.put("/api/trading/kill-switch")
+async def trading_kill_switch(body: KillSwitchRequest) -> dict:
+    return await asyncio.to_thread(trading.set_kill_switch, body.on)
 
 
 @app.post("/api/telegram-test")

@@ -60,6 +60,8 @@ async function boot() {
   connectWS();
   refreshBotHealth();
   setInterval(refreshBotHealth, 60000);
+  refreshTradeBadge();
+  setInterval(refreshTradeBadge, 15000);
 }
 
 // ---------------- bot health strip ----------------
@@ -522,7 +524,9 @@ async function openChart(sym) {
     <div><b>MACD</b> ${fmtNum(ind.macd, 4)} / sig ${fmtNum(ind.macd_signal, 4)}</div>
     <div><b>ADX</b> ${fmtNum(ind.adx, 1)}</div>
     <div><b>ATR</b> ${fmtNum(ind.atr, priceDec(ind.price || 1))}</div>
-    <div><b>Vol×</b> ${fmtNum(ind.vol_ratio, 2)}</div>`;
+    <div><b>Vol×</b> ${fmtNum(ind.vol_ratio, 2)}</div>
+    <div id="miniTrade"></div>`;
+  renderMiniTrade(sym);
 
   renderDiag(c);
 
@@ -840,6 +844,222 @@ async function saveCfg() {
   }
   $("#cfgMsg").textContent = "✓ saved — applies on the next scan";
   state.cfg = (await fetch("/api/config").then((r) => r.json())).config;
+}
+
+// ---------------- trading ----------------
+let _tradeTimer = null;
+const money = (v, d = 2) => (v == null || isNaN(v) ? "–" : (v >= 0 ? "+" : "") + Number(v).toFixed(d));
+
+async function refreshTradeBadge() {
+  try {
+    const st = await fetch("/api/trading/status").then((r) => r.json());
+    state.trading = st;
+    const b = $("#tradeBadge");
+    const openN = (st.positions || []).length;
+    const uPnl = (st.positions || []).reduce((s, p) => s + (p.unrealized_pnl || 0), 0);
+    const day = st.realized_pnl_today_usdt || 0;
+    b.hidden = false;
+    b.className = "trade-badge " + (st.mode === "live" ? "live" : "dry") + (st.kill_switch ? " killed" : "");
+    b.textContent =
+      `${st.mode === "live" ? "LIVE" : "DRY"}` +
+      (st.kill_switch ? " ⛔" : "") +
+      ` · ${openN} pos` +
+      (openN ? ` (${money(uPnl)}U)` : "") +
+      ` · day ${money(day)}U`;
+    if ($("#tradeBg").classList.contains("show")) renderTrade(st);
+  } catch (e) {
+    $("#tradeBadge").hidden = true;
+  }
+}
+
+$("#btnTrade").onclick = async () => {
+  $("#tradeBg").classList.add("show");
+  await refreshTradeBadge();
+  renderTrade(state.trading || {});
+  clearInterval(_tradeTimer);
+  _tradeTimer = setInterval(refreshTradeBadge, 5000);
+};
+$("#tradeClose").onclick = () => {
+  $("#tradeBg").classList.remove("show");
+  clearInterval(_tradeTimer);
+};
+$("#tradeBg").onclick = (e) => { if (e.target.id === "tradeBg") $("#tradeClose").onclick(); };
+
+function renderTrade(st) {
+  if (!st || !st.limits) return;
+  $("#tradeModeTag").textContent = st.mode === "live" ? "LIVE" : "DRY-RUN";
+  $("#tradeModeTag").className = "mode-tag " + (st.mode === "live" ? "live" : "dry");
+
+  const lim = st.limits;
+  const readyLine =
+    st.mode === "live"
+      ? `Anthropic key ${st.anthropic_configured ? "✓" : "✗"} · MCP OAuth ${st.oauth_configured ? "✓" : "✗"} · model ${st.model}` +
+        (st.live_ready ? "" : ' — <b class="down">not ready</b>, set the env vars (see docs/trading.md)')
+      : "Simulated fills at the reference price minus a taker fee. No network, no order.";
+  $("#tradeStatus").innerHTML = `
+    <div class="mini">
+      <div><b>Mode</b> ${st.mode}</div>
+      <div><b>Orders today</b> ${st.orders_today} / ${lim.max_orders_per_day}</div>
+      <div><b>Realised P/L today</b> <span class="${(st.realized_pnl_today_usdt||0) >= 0 ? "up" : "down"}">${money(st.realized_pnl_today_usdt)} USDT</span></div>
+      <div><b>Per-order cap</b> ${lim.max_notional_per_order_usdt} USDT</div>
+      <div><b>Daily loss limit</b> ${lim.daily_loss_limit_usdt} USDT ${st.daily_loss_tripped ? '· <b class="down">TRIPPED</b>' : ""}</div>
+      <div><b>Max positions</b> ${lim.max_open_positions}</div>
+    </div>
+    <div class="trade-kill">
+      <label><input type="checkbox" id="killSw" ${st.kill_switch_manual ? "checked" : ""} ${st.kill_switch_env ? "disabled" : ""}/>
+        Kill switch (blocks new OPENs; CLOSE always allowed)</label>
+      ${st.kill_switch_env ? '<span class="meta">forced on by KILL_SWITCH env</span>' : ""}
+    </div>
+    <p class="hint">${readyLine}</p>`;
+  const ks = $("#killSw");
+  if (ks && !st.kill_switch_env) ks.onchange = async () => {
+    await fetch("/api/trading/kill-switch", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ on: ks.checked }),
+    });
+    refreshTradeBadge();
+  };
+
+  const pos = st.positions || [];
+  $("#tradePositions").innerHTML = pos.length
+    ? `<div style="overflow-x:auto"><table class="cfg">
+        <tr><th>coin</th><th>qty</th><th>entry</th><th>mark</th><th>uPnL</th><th></th></tr>
+        ${pos.map((p) => {
+          const dec = priceDec(p.entry_px);
+          return `<tr>
+            <td>${p.symbol} <span class="hint">${p.mode}</span></td>
+            <td>${p.base_qty.toPrecision(6)}</td>
+            <td>${fmtNum(p.entry_px, dec)}</td>
+            <td>${p.mark != null ? fmtNum(p.mark, dec) : "–"}</td>
+            <td class="${(p.unrealized_pnl||0) >= 0 ? "up" : "down"}">${money(p.unrealized_pnl)} U${p.unrealized_pnl_pct != null ? ` (${money(p.unrealized_pnl_pct,1)}%)` : ""}</td>
+            <td><button class="ghost" data-close="${p.symbol}">Close</button></td>
+          </tr>`;
+        }).join("")}
+      </table></div>`
+    : '<p class="hint">No open positions.</p>';
+  $("#tradePositions").querySelectorAll("[data-close]").forEach((btn) => {
+    btn.onclick = () => placeOrder(btn.dataset.close, "CLOSE");
+  });
+
+  // coin dropdown = watchlist
+  const sel = $("#tradeSym");
+  const cur = sel.value;
+  sel.innerHTML = [...state.coins.keys()].map((s) => `<option value="${s}">${s}</option>`).join("");
+  if (cur) sel.value = cur;
+  if (!$("#tradeNotional").value) $("#tradeNotional").value = st.notional_usdt;
+
+  $("#tradeHistory").innerHTML = (st.trades || []).length
+    ? `<div style="overflow-x:auto"><table class="cfg">
+        <tr><th>coin</th><th>entry</th><th>exit</th><th>P/L</th><th>when</th></tr>
+        ${st.trades.map((t) => {
+          const dec = priceDec(t.entry_px);
+          return `<tr><td>${t.symbol} <span class="hint">${t.mode}</span></td>
+            <td>${fmtNum(t.entry_px, dec)}</td><td>${fmtNum(t.exit_px, dec)}</td>
+            <td class="${t.realized_pnl >= 0 ? "up" : "down"}">${money(t.realized_pnl)} U</td>
+            <td class="hint">${timeAgo(t.closed_at)}</td></tr>`;
+        }).join("")}
+      </table></div>`
+    : '<p class="hint">No closed trades yet.</p>';
+
+  $("#tradeAudit").innerHTML = (st.audit || []).length
+    ? `<div style="overflow-x:auto"><table class="cfg">
+        <tr><th>when</th><th>intent</th><th>coin</th><th>status</th><th>detail</th></tr>
+        ${st.audit.map((a) => {
+          let detail = a.error || a.text || "";
+          if (a.guardrail) { try { const g = JSON.parse(a.guardrail); if (!g.ok) detail = g.reasons.join("; "); } catch (e) {} }
+          if (a.tool_calls) { try { detail = JSON.parse(a.tool_calls).map((c) => c.name + (c.is_error ? "✗" : "✓")).join(", ") + (detail ? " · " + detail : ""); } catch (e) {} }
+          return `<tr><td class="hint">${timeAgo(a.ts)}</td><td>${a.intent}</td><td>${a.symbol}</td>
+            <td class="${["executed","dry-run"].includes(a.status) ? "up" : (a.status === "blocked" || a.status === "error" || a.status === "refused" ? "down" : "")}">${a.status}</td>
+            <td class="hint">${(detail || "").slice(0, 120)}</td></tr>`;
+        }).join("")}
+      </table></div>`
+    : '<p class="hint">No agent calls yet.</p>';
+}
+
+function renderMiniTrade(sym) {
+  const el = $("#miniTrade");
+  if (!el) return;
+  const st = state.trading;
+  if (!st || !st.limits) { el.innerHTML = ""; return; }
+  const pos = (st.positions || []).find((p) => p.symbol === sym);
+  const n = st.notional_usdt;
+  if (pos) {
+    el.innerHTML = `<button class="ghost" id="miniClose">Close ${sym} (${money(pos.unrealized_pnl)} U)</button>`;
+    $("#miniClose").onclick = () => placeOrder(sym, "CLOSE");
+  } else {
+    el.innerHTML = `<button id="miniBuy">${st.mode === "live" ? "Execute" : "Dry-run"} BUY ${n} USDT</button>`;
+    $("#miniBuy").onclick = () => placeOrder(sym, "OPEN", n);
+  }
+}
+
+$("#tradeBuy").onclick = () => {
+  const sym = $("#tradeSym").value;
+  const n = Number($("#tradeNotional").value);
+  if (!sym || !n || n <= 0) { $("#tradeMsg").textContent = "pick a coin and a USDT amount"; return; }
+  placeOrder(sym, "OPEN", n);
+};
+
+async function placeOrder(symbol, intent, notional) {
+  const st = state.trading || {};
+  const live = st.mode === "live";
+  const price = (state.coins.get(symbol)?.price?.price) ?? null;
+  const dec = price ? priceDec(price) : 2;
+  const lines = [];
+  if (intent === "OPEN") {
+    lines.push(`<b>${live ? "LIVE " : "DRY-RUN "}MARKET BUY</b> · ${symbol}`);
+    lines.push(`Spend ~<b>${notional} USDT</b>${price ? ` at ~${fmtNum(price, dec)}` : ""}`);
+  } else {
+    const p = (st.positions || []).find((x) => x.symbol === symbol);
+    lines.push(`<b>${live ? "LIVE " : "DRY-RUN "}MARKET SELL</b> · ${symbol}`);
+    if (p) lines.push(`Close ~<b>${p.base_qty.toPrecision(6)}</b>${price ? ` at ~${fmtNum(price, dec)}` : ""} · uPnL ${money(p.unrealized_pnl)} U`);
+  }
+  lines.push(live
+    ? '<span class="down">This places a REAL spot order on your Binance sub-account via the MCP agent.</span>'
+    : '<span class="hint">Simulated only — no real order, no network.</span>');
+
+  const ok = await askConfirm({
+    title: (live ? "Confirm LIVE order" : "Confirm dry-run order"),
+    bodyHtml: lines.map((l) => `<div>${l}</div>`).join(""),
+    danger: live,
+  });
+  if (!ok) return;
+
+  $("#tradeMsg").textContent = "placing…";
+  try {
+    const r = await fetch(`/api/trading/order`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol, intent, notional_usdt: intent === "OPEN" ? notional : undefined, confirm: true }),
+    });
+    const d = await r.json();
+    if (!r.ok) { $("#tradeMsg").textContent = "✕ " + (d.detail || "failed"); return; }
+    if (d.status === "blocked") $("#tradeMsg").textContent = "⛔ blocked: " + (d.reasons || []).join("; ");
+    else if (d.status === "refused") $("#tradeMsg").textContent = "agent refused: " + (d.text || "");
+    else if (d.status === "no-op") $("#tradeMsg").textContent = "agent placed nothing: " + (d.text || "");
+    else if (d.status === "error") $("#tradeMsg").textContent = "✕ " + (d.error || "error");
+    else $("#tradeMsg").textContent = "✓ " + (d.note || d.status) + (d.realized_pnl != null ? ` · P/L ${money(d.realized_pnl)} U` : "");
+  } catch (e) {
+    $("#tradeMsg").textContent = "✕ " + e.message;
+  }
+  refreshTradeBadge();
+  setTimeout(() => ($("#tradeMsg").textContent = ""), 8000);
+}
+
+function askConfirm({ title, bodyHtml, danger }) {
+  return new Promise((resolve) => {
+    $("#confirmTitle").textContent = title;
+    $("#confirmBody").innerHTML = bodyHtml;
+    const ok = $("#confirmOk"), cancel = $("#confirmCancel");
+    ok.className = danger ? "danger" : "";
+    ok.textContent = danger ? "Place REAL order" : "Confirm";
+    $("#confirmBg").classList.add("show");
+    const done = (v) => {
+      $("#confirmBg").classList.remove("show");
+      ok.onclick = cancel.onclick = null;
+      resolve(v);
+    };
+    ok.onclick = () => done(true);
+    cancel.onclick = () => done(false);
+  });
 }
 
 // ---------------- utils ----------------

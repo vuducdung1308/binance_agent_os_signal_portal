@@ -50,6 +50,7 @@ WebSocket, and keeps its own history in SQLite. The bot keeps running exactly as
 | **Signal history** | Every entry/exit kept in SQLite indefinitely. Backfilled from the bot's `output/signals/*.txt` on first run, then kept in sync every scan. |
 | **Bot health** | Header strip showing each bot scheduler's state, from `launchctl` (falls back to log‑file mtime). |
 | **Notifications** | Optional desktop notification + sound on a new signal, and optional Telegram push (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`) for every signal the portal detects. |
+| **Live trading** (opt-in) | Place spot MARKET orders through the **Binance Agent OS MCP** (Claude drives an OAuth-scoped, spot-only toolset). `dry-run` by default — simulated, no network. Manual + confirm only, no auto-execution. Guardrails (per-order cap, orders/day, daily-loss kill switch, one position). Tracks open positions with live unrealised P/L, closed-trade realised P/L, and an agent audit log. See [docs/trading.md](docs/trading.md). |
 
 ---
 
@@ -71,11 +72,15 @@ A deliberately light design — **one process**:
   (snapshot + engine‑condition diagnostics in one pass) and a parameterised
   `run_backtest()`.
 - **`portal/store.py`** — SQLite: watchlist, alert thresholds, engine‑param overrides,
-  signal history, indicator snapshots, portal paper positions.
+  signal history, indicator snapshots, portal paper positions, and (if trading is on)
+  live positions / trades / agent audit.
 - **`portal/market.py`** — the few Binance calls the bot doesn't expose in the needed
   shape (batched 24h ticker; raw klines *including* the forming candle, for the chart;
   symbol validation).
 - **`portal/bot_health.py`** — `launchctl` + log‑mtime probe of the bot's schedulers.
+- **`portal/notify.py`** — best‑effort Telegram push for detected signals.
+- **`portal/trading.py`** — optional spot execution: guardrails, a dry‑run simulator, and
+  a live executor that drives the Binance Agent OS MCP through Claude. Off by default.
 - **`static/`** — `index.html` + `app.js` + `style.css`. No build step. The candlestick
   chart uses `lightweight-charts` from a CDN; everything else is hand‑rolled.
 
@@ -277,6 +282,13 @@ In the browser, the connection dot should be **live**, cards should fill in with
   signal‑loop pass only seeds state — it does not notify the backlog — so you only get
   messages for signals that fire *after* startup. `POST /api/telegram-test` verifies the
   wiring.
+- **Trading** (`portal/trading.py`). `dry-run` by default. An order is proposed by a
+  click, checked against the guardrails, then either simulated (dry-run) or handed to
+  Claude via the Anthropic Messages API with an `mcp_servers` connector to the Binance
+  Agent OS MCP (`anthropic-beta: mcp-client-2025-11-20`, default-deny `mcp_toolset`
+  allow-listing spot order/query tools). Fills update `live_position`; a close writes a
+  `live_trade` row and rolls realised P/L into the day counter. Every agent call is
+  recorded in `agent_call`. Full walkthrough: [docs/trading.md](docs/trading.md).
 
 ---
 
@@ -299,6 +311,12 @@ All optional. Set via `.env` in the project root or as environment variables (en
 | `TELEGRAM_BOT_TOKEN` | *(none)* | Set with `TELEGRAM_CHAT_ID` to push a message for every signal the portal detects. Separate from the bot's own `TELEGRAM_*`. |
 | `TELEGRAM_CHAT_ID` | *(none)* | Target chat for the push. |
 | `PORTAL_TELEGRAM_INCLUDE_BOT` | `false` | Also push signals ingested from the bot's `output/signals/*.txt`. Leave off when `BOT_ROOT` is a real bot that already sends its own. |
+| `TRADE_MODE` | `dry-run` | `live` enables real spot orders via the MCP. |
+| `KILL_SWITCH` | `0` | Any truthy value blocks new OPENs (CLOSE stays allowed). |
+| `TRADE_NOTIONAL_USDT` | `10` | USDT per manual OPEN. |
+| `TRADE_MAX_NOTIONAL_USDT` / `TRADE_MAX_ORDERS_PER_DAY` / `TRADE_DAILY_LOSS_LIMIT_USDT` / `TRADE_MAX_OPEN_POSITIONS` | `10 / 5 / 10 / 1` | Guardrails. Env can tighten or modestly raise, up to a hard ceiling (`100 / 50 / 1000 / 3`). |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | *(none)* / `claude-sonnet-5` | Execution agent (live mode only). |
+| `BINANCE_AGENT_MCP_URL` / `BINANCE_AGENT_OAUTH_TOKEN` | `…/mcp/agentic` / *(none)* | The MCP connector + a sub-account OAuth token (live mode only — see [docs/trading.md](docs/trading.md)). |
 | `PYTHON` | `python3` | Interpreter `run.sh` uses to create `.venv`. |
 
 ---
@@ -328,6 +346,9 @@ Base URL `http://127.0.0.1:8777`.
 | `GET` | `/api/orderflow/{symbol}` | Taker buy/sell split + bid/ask ratio. |
 | `GET` | `/api/bot-health` | Per‑scheduler status from `launchctl` / log mtime. |
 | `POST` | `/api/telegram-test` | Send a test message to the configured chat. |
+| `GET` | `/api/trading/status` | Mode, guardrails, kill switch, open positions + live P/L, closed trades, agent audit. |
+| `POST` | `/api/trading/order` | `{ "symbol", "intent": "OPEN"\|"CLOSE", "notional_usdt"?, "confirm": true }` — `confirm` required. |
+| `PUT` | `/api/trading/kill-switch` | `{ "on": bool }` — the manual kill switch. |
 | `WS` | `/ws` | `prime`, then `price_batch` / `indicators` / `signal`. |
 | `GET` | `/` , `/static/*` | Frontend. |
 
@@ -346,6 +367,10 @@ rebuilt on the next launch.
 | `signal_event` | entry/exit history. `source` ∈ `portal` (portal‑detected), `bot` (ingested from the bot's `.txt`), `backfill` (first‑run import) |
 | `indicator_snapshot` | indicator time series for sparklines/history; auto‑pruned |
 | `portal_position` | the portal's own paper positions (one per symbol) |
+| `trading_state` | day‑scoped order/P‑L counters + the manual kill switch |
+| `live_position` | open spot positions the portal placed (dry‑run or live) |
+| `live_trade` | closed round‑trips with realised P/L |
+| `agent_call` | every execution‑agent call, for audit |
 
 `.gitignore` already excludes `.venv/`, `data/portal.db*`, `.env`, `__pycache__/`.
 
@@ -384,10 +409,13 @@ backtest — never the live engine or the portal's own paper positions.
 │   ├── market.py       # batched 24h ticker, raw klines, symbol validation
 │   ├── backfill.py     # parse output/signals/*.txt → signal rows
 │   ├── bot_health.py   # launchctl / log-mtime probe
+│   ├── notify.py       # Telegram push for detected signals
+│   ├── trading.py      # guardrails + dry-run + live executor (Claude + MCP) + P/L
 │   └── settings.py     # env-driven PortalSettings
+├── docs/trading.md     # how to enable + authorize live trading
 ├── static/
 │   ├── index.html      # single page, no framework
-│   ├── app.js          # dashboard, WS client, modal, backtest form
+│   ├── app.js          # dashboard, WS client, modal, backtest form, trading panel
 │   └── style.css
 ├── bot/                # bundled snapshot of the bot's engine (BOT_ROOT default)
 │   ├── src/            # indicators, price_data, price_watch, signal_engine, order_flow
@@ -442,9 +470,12 @@ Open a coin → "Engine conditions" shows exactly which gates are unmet.
 
 ## Limitations & non-goals
 
-- **Local, single user, no auth.** Bind stays on `127.0.0.1`. Do not expose it.
-- **Not a trading system.** The portal places no orders and moves no funds. It reads
-  market data and mirrors the bot.
+- **Local, single user, no auth.** Bind stays on `127.0.0.1`. Do not expose it — with
+  live trading configured, the process holds an OAuth token that can place spot orders.
+- **Trading is opt-in and manual.** Default `dry-run` places no orders. Even in `live`
+  mode there is no auto-execution: every order is a confirmed click, capped by
+  guardrails, on a Binance **sub-account** you authorize yourself. No withdrawals, no
+  transfers, no SL/TP orders. **Not financial advice.**
 - **Portal paper positions are close‑candle only.** Unlike the bot's dedicated fast
   watcher, the portal checks its *own* paper exits on the 30 s closed‑candle pass, so an
   intrabar SL/TP touch can lag by up to one candle. Real trades are covered by the bot.

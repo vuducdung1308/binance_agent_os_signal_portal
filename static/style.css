@@ -228,3 +228,36 @@ table.cfg th, table.cfg td { border: 1px solid var(--border); padding: 5px 7px; 
 table.cfg th { background: var(--panel-2); }
 table.cfg input { width: 90px; }
 .hint { color: var(--muted); font-size: 11.5px; margin: 8px 0; }
+
+/* ---------------- trading ---------------- */
+.trade-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  border: 1px solid var(--border); font-variant-numeric: tabular-nums;
+}
+.trade-badge.dry { color: var(--warn); border-color: var(--warn); }
+.trade-badge.live { color: var(--down); border-color: var(--down); }
+.trade-badge.killed { background: rgba(248,81,73,.15); }
+
+.mode-tag {
+  font-size: 11px; padding: 1px 7px; border-radius: 4px; margin-left: 8px; vertical-align: middle;
+}
+.mode-tag.dry { background: rgba(210,153,34,.18); color: var(--warn); }
+.mode-tag.live { background: rgba(248,81,73,.2); color: var(--down); }
+
+.trade-form { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+.trade-form label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); }
+.trade-form input, .trade-form select { margin-top: 3px; }
+.trade-form input[type="number"] { width: 110px; }
+.trade-kill { margin: 8px 0; font-size: 12px; display: flex; gap: 10px; align-items: center; }
+.trade-kill label { display: flex; gap: 6px; align-items: center; }
+
+#miniTrade { margin-top: 4px; }
+#miniTrade button { font-size: 11px; padding: 4px 9px; }
+
+.confirm-modal { width: min(460px, 92vw); }
+.confirm-modal h2 { margin-bottom: 12px; }
+.confirm-modal #confirmBody div { margin: 5px 0; font-size: 13px; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+button.danger { background: var(--down); color: #fff; border-color: var(--down); }
+button.danger:hover { filter: brightness(1.1); }
+#confirmBg .modal-bg, #confirmBg { z-index: 60; }

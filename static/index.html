@@ -15,7 +15,9 @@
     <span class="meta">updated <span id="upd">–</span></span>
     <span class="meta bot-health" id="botHealth" title="Status of the bot's schedulers (from logs)">bot: …</span>
     <span class="spacer"></span>
+    <span id="tradeBadge" class="trade-badge" hidden></span>
     <button id="btnBell" title="Toggle desktop/sound alerts on new signals">🔕 Alerts</button>
+    <button id="btnTrade">💹 Trading</button>
     <button id="btnCfg">⚙ Alert thresholds</button>
   </header>
 
@@ -102,6 +104,51 @@
       <h2>Alert thresholds (affect dashboard display only)</h2>
       <p class="hint" id="cfgNote"></p>
       <div id="cfgBox"></div>
+    </div>
+  </div>
+
+  <div id="tradeBg" class="modal-bg">
+    <div class="modal">
+      <button class="close" id="tradeClose">✕</button>
+      <h2>Trading <span id="tradeModeTag" class="mode-tag">–</span></h2>
+      <p class="hint">
+        Spot market orders placed via the Binance Agent OS MCP (an LLM agent with a
+        default-deny toolset). Every order is confirmed here first — there is no
+        auto-execution. In <b>dry-run</b> nothing hits the network.
+      </p>
+      <div id="tradeStatus"></div>
+
+      <h2 class="sub">Open positions</h2>
+      <div id="tradePositions"></div>
+
+      <h2 class="sub">Place a market order</h2>
+      <div class="trade-form">
+        <label>Coin
+          <select id="tradeSym"></select>
+        </label>
+        <label>Spend (USDT)
+          <input id="tradeNotional" type="number" step="1" min="1" />
+        </label>
+        <button id="tradeBuy">Place market BUY</button>
+        <span id="tradeMsg" class="meta"></span>
+      </div>
+
+      <h2 class="sub">Recent closed trades</h2>
+      <div id="tradeHistory"></div>
+
+      <h2 class="sub">Agent audit</h2>
+      <div id="tradeAudit"></div>
+    </div>
+  </div>
+
+  <div id="confirmBg" class="modal-bg">
+    <div class="modal confirm-modal">
+      <h2 id="confirmTitle">Confirm order</h2>
+      <div id="confirmBody"></div>
+      <div class="confirm-actions">
+        <button id="confirmCancel" class="ghost">Cancel</button>
+        <button id="confirmOk">Place order</button>
+      </div>
     </div>
   </div>
 
