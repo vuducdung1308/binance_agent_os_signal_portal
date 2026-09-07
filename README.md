@@ -256,6 +256,29 @@ curl -s localhost:8777/api/bot-health | python -m json.tool
 In the browser, the connection dot should be **live**, cards should fill in within ~30 s
 (one signal‑loop pass), and the header should show `bot: 🟢…`.
 
+### 8. (Optional) Auto‑start on macOS
+
+Run the portal on every login/reboot, respawning on crash, via a LaunchAgent:
+
+```bash
+./deploy/install-launchagent.sh      # after ./run.sh has created .venv at least once
+```
+
+It installs `~/Library/LaunchAgents/com.binance-agent-os.signal-portal.plist` (runs
+`.venv/bin/python -m portal.app`), starts the portal immediately, and reloads it at
+login. Logs go to `logs/portal.{out,err}.log`.
+
+```bash
+launchctl list | grep signal-portal                 # status (col 2 = last exit code)
+launchctl unload ~/Library/LaunchAgents/com.binance-agent-os.signal-portal.plist   # stop for good
+launchctl load   ~/Library/LaunchAgents/com.binance-agent-os.signal-portal.plist   # start again
+kill <pid>                                           # clean stop; stays down until reload
+./deploy/uninstall-launchagent.sh                    # remove it
+```
+
+`KeepAlive` respawns on a crash or non‑zero exit but a clean `SIGTERM` (exit 0) stays
+down, so you can still iterate. Edit `.env` then reload to pick up changes.
+
 ---
 
 ## How it works

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.binance-agent-os.signal-portal</string>
+
+  <!-- Runs the venv python directly (no pip / no port-kill) — create the venv once
+       with ./run.sh before installing this agent. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PORTAL_DIR__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>portal.app</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__PORTAL_DIR__</string>
+
+  <!-- Start at login (LaunchAgents load in the user session, so this is "on reboot"
+       once you've logged in). -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Respawn on a crash or a non-zero exit, but a clean stop (SIGTERM -> exit 0,
+       e.g. `kill <pid>`) stays stopped so you can iterate. `launchctl unload` also
+       stops it for good. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>Crashed</key>
+    <true/>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__PORTAL_DIR__/logs/portal.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__PORTAL_DIR__/logs/portal.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 data/portal.db
 data/portal.db-*
+logs/
 .env
 
 # bundled bot: keep the code + its secret-free .env + folder structure, drop runtime output
