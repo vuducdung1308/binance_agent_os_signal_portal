@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from . import bot_bridge as bb
 from .backfill import parse_signals_dir
 from .bot_health import bot_health
+from .chartlab import analyze_chart
 from .market import klines_raw, symbol_exists
 from .poller import Hub, Poller
 from .settings import bot_watchlist, load_portal_settings
@@ -229,6 +230,18 @@ async def get_klines(symbol: str, interval: Optional[str] = None, limit: int = 3
                 {"t": r[0] // 1000, "o": r[1], "h": r[2], "l": r[3], "c": r[4], "v": r[5]}
                 for r in raw
             ]}
+
+
+@app.get("/api/chart/{symbol}")
+async def get_chart(symbol: str, interval: Optional[str] = None, limit: int = 400) -> dict:
+    """Candles + drawing overlays (S/R, trendlines, divergence, liquidity, volume
+    profile). Heuristic price-structure aids — not signal inputs."""
+    interval = interval or settings.timeframe
+    limit = max(120, min(limit, 1000))
+    try:
+        return await asyncio.to_thread(analyze_chart, symbol.upper(), interval, limit)
+    except Exception as exc:
+        raise HTTPException(502, f"chart analysis error: {exc}")
 
 
 @app.get("/api/snapshots/{symbol}")

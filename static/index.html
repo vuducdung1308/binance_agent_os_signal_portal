@@ -60,8 +60,12 @@
       <button class="close" id="modalClose">✕</button>
       <h2 id="modalTitle">–</h2>
       <div id="mini" class="mini"></div>
+      <div id="chartToggles" class="chart-toggles"></div>
       <div id="chart"></div>
-      <p class="hint">Candles include the still-forming bar (for a live chart). Indicators &amp; signals on the dashboard are computed on CLOSED candles — the same basis the bot uses.</p>
+      <div id="rsiChart" hidden></div>
+      <p class="hint">Candles (incl. the forming bar) from Binance. Overlays — S/R zones, auto
+        trendlines, RSI divergence, liquidity pools / swings, volume &amp; volume‑profile
+        (POC / value area) — are heuristic drawing aids, not signal inputs.</p>
 
       <h2 class="sub">Engine conditions — why a signal did / didn't fire</h2>
       <div id="diag"></div>

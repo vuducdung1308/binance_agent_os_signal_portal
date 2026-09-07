@@ -42,6 +42,7 @@ WebSocket, and keeps its own history in SQLite. The bot keeps running exactly as
 | Area | Detail |
 |---|---|
 | **Live dashboard** | Per‑coin card: price + 24h %, price sparkline, RSI / ADX (with bars), MACD histogram, `vol / avg20`, EMA50 / EMA200, trend badge, alert badges, latest signal, and any open bot / portal position. |
+| **Chart overlays** | The coin modal's candlestick chart (Binance klines, forming bar included) with toggleable heuristic overlays — support/resistance zones (clustered swing pivots), auto trendlines (broken flag), RSI divergence, liquidity pools + swing points, volume, and a volume profile (POC / value area) — plus a synced RSI sub‑pane. Drawing aids only, not signal inputs (`portal/chartlab.py`). |
 | **Watchlist** | Add / remove coins from the UI; validated against Binance; persisted in SQLite (seeded once from the bot's `SIGNAL_COINS`). Survives restarts. |
 | **Alert thresholds** | Per‑coin or default overrides for RSI / ADX / MACD‑hist / volume‑ratio badges. Applied on the next scan, no restart. **Display only** — they do not change the bot engine. |
 | **"Why no signal yet"** | A read‑only mirror of the engine's entry gates: for each setup, which conditions currently pass / fail and by how much. |
@@ -365,6 +366,7 @@ Base URL `http://127.0.0.1:8777`.
 | `POST` | `/api/backtest/{symbol}` | `{ "days": 90, "params": {…}, "compare": true, "use_saved": false }` → tuned + default side by side. |
 | `GET` | `/api/signals?symbol=&kind=&limit=` | Recorded signal events (most recent first). |
 | `GET` | `/api/klines/{symbol}?interval=&limit=` | Raw candles **including** the forming one (chart only). |
+| `GET` | `/api/chart/{symbol}?interval=&limit=` | Candles + overlays: `sr_zones`, `trendlines`, `divergences`, `liquidity`, `volume_profile`, `ema`, `rsi`. |
 | `GET` | `/api/snapshots/{symbol}?hours=48` | Stored indicator time series. |
 | `GET` | `/api/orderflow/{symbol}` | Taker buy/sell split + bid/ask ratio. |
 | `GET` | `/api/bot-health` | Per‑scheduler status from `launchctl` / log mtime. |
@@ -432,6 +434,7 @@ backtest — never the live engine or the portal's own paper positions.
 │   ├── market.py       # batched 24h ticker, raw klines, symbol validation
 │   ├── backfill.py     # parse output/signals/*.txt → signal rows
 │   ├── bot_health.py   # launchctl / log-mtime probe
+│   ├── chartlab.py     # S/R zones, trendlines, divergence, liquidity, volume profile
 │   ├── notify.py       # Telegram push for detected signals
 │   ├── trading.py      # guardrails + dry-run + live executor (Claude + MCP) + P/L
 │   └── settings.py     # env-driven PortalSettings

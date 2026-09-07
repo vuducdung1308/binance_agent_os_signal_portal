@@ -509,7 +509,17 @@ function prependFeed(ev, isNew, append) {
 }
 
 // ---------------- chart modal ----------------
-let chart, candleSeries, emaFastSeries, emaSlowSeries, modalSym = null;
+let chart, rsiChart, candleSeries, modalSym = null;
+const CHART_TOGGLE_KEYS = ["vol", "sr", "trend", "liq", "div", "rsi", "vp"];
+const chartToggleDefault = { vol: 1, sr: 1, trend: 1, liq: 0, div: 1, rsi: 1, vp: 0 };
+function chartToggles() {
+  const t = {};
+  for (const k of CHART_TOGGLE_KEYS) {
+    const v = localStorage.getItem("chart_" + k);
+    t[k] = v == null ? !!chartToggleDefault[k] : v === "1";
+  }
+  return t;
+}
 async function openChart(sym) {
   const c = state.coins.get(sym);
   modalSym = sym;
@@ -547,8 +557,7 @@ async function openChart(sym) {
       }).join("")
     : '<p class="hint">No signals recorded for this coin yet.</p>';
 
-  const data = await fetch(`/api/klines/${sym}?limit=300`).then((r) => r.json());
-  drawChart(data, sym);
+  drawChart(sym);
 }
 
 function renderDiag(c) {
@@ -726,13 +735,48 @@ async function runBacktest(sym) {
   }
 }
 
-function drawChart(data, sym) {
+async function drawChart(sym) {
+  const box = $("#chart");
+  box.innerHTML = '<p class="hint">loading chart…</p>';
+  try {
+    const [d, evs] = await Promise.all([
+      fetch(`/api/chart/${sym}?limit=400`).then((r) => r.json()),
+      fetch(`/api/signals?symbol=${sym}&limit=60`).then((r) => r.json()).catch(() => []),
+    ]);
+    state.chartData = d;
+    state.chartSignals = evs || [];
+    renderChartToggles();
+    renderChart();
+  } catch (e) {
+    box.innerHTML = `<p class="hint">chart error (${e.message})</p>`;
+  }
+}
+
+const LS = () => LightweightCharts.LineStyle;
+function renderChartToggles() {
+  const t = chartToggles();
+  const labels = { vol: "Volume", sr: "S/R zones", trend: "Trendlines", liq: "Liquidity", div: "Divergence", rsi: "RSI", vp: "Vol profile" };
+  $("#chartToggles").innerHTML = CHART_TOGGLE_KEYS
+    .map((k) => `<label><input type="checkbox" data-ct="${k}" ${t[k] ? "checked" : ""}/> ${labels[k]}</label>`)
+    .join("");
+  $("#chartToggles").querySelectorAll("[data-ct]").forEach((el) => {
+    el.onchange = () => { localStorage.setItem("chart_" + el.dataset.ct, el.checked ? "1" : "0"); renderChart(); };
+  });
+}
+
+function renderChart() {
+  const d = state.chartData;
   const box = $("#chart");
   box.innerHTML = "";
+  if (rsiChart) { try { rsiChart.remove(); } catch (e) {} rsiChart = null; }
   if (typeof LightweightCharts === "undefined") {
-    box.innerHTML = '<p class="hint">Chart library failed to load (offline?). Candle data is still available via /api/klines.</p>';
+    box.innerHTML = '<p class="hint">Chart library failed to load (offline?).</p>';
+    $("#rsiChart").hidden = true;
     return;
   }
+  if (!d || !d.candles || !d.candles.length) { box.innerHTML = '<p class="hint">no candle data</p>'; return; }
+  const T = chartToggles();
+
   chart = LightweightCharts.createChart(box, {
     layout: { background: { color: "#161b22" }, textColor: "#8b949e" },
     grid: { vertLines: { color: "#21262d" }, horzLines: { color: "#21262d" } },
@@ -744,45 +788,109 @@ function drawChart(data, sym) {
     upColor: "#3fb950", downColor: "#f85149", borderVisible: false,
     wickUpColor: "#3fb950", wickDownColor: "#f85149",
   });
-  candleSeries.setData(data.candles.map((k) => ({ time: k.t, open: k.o, high: k.h, low: k.l, close: k.c })));
+  candleSeries.setData(d.candles.map((k) => ({ time: k.t, open: k.o, high: k.h, low: k.l, close: k.c })));
 
-  emaFastSeries = chart.addLineSeries({ color: "#58a6ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-  emaSlowSeries = chart.addLineSeries({ color: "#d29922", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-  emaFastSeries.setData(emaLine(data.candles, 50));
-  emaSlowSeries.setData(emaLine(data.candles, 200));
-
-  fetch(`/api/signals?symbol=${sym}&limit=60`).then((r) => r.json()).then((evs) => {
-    const marks = evs
-      .filter((e) => e.price != null)
-      .map((e) => ({
-        time: Math.floor(new Date(e.ts).getTime() / 1000),
-        position: e.kind === "exit" ? "aboveBar" : "belowBar",
-        color: e.kind === "exit" ? "#d29922" : "#3fb950",
-        shape: e.kind === "exit" ? "arrowDown" : "arrowUp",
-        text: (e.setup || e.kind || "").slice(0, 12),
-      }))
-      .sort((a, b) => a.time - b.time);
-    if (marks.length) candleSeries.setMarkers(marks);
-  });
-  chart.timeScale().fitContent();
-}
-
-function emaLine(candles, period) {
-  if (candles.length < period) return [];
-  const k = 2 / (period + 1);
-  let prev = candles.slice(0, period).reduce((s, c) => s + c.c, 0) / period;
-  const out = [{ time: candles[period - 1].t, value: prev }];
-  for (let i = period; i < candles.length; i++) {
-    prev = (candles[i].c - prev) * k + prev;
-    out.push({ time: candles[i].t, value: prev });
+  if (d.ema) {
+    const ef = chart.addLineSeries({ color: "#58a6ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    const es = chart.addLineSeries({ color: "#d29922", lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    ef.setData((d.ema.fast || []).map((p) => ({ time: p.t, value: p.value })));
+    es.setData((d.ema.slow || []).map((p) => ({ time: p.t, value: p.value })));
   }
-  return out;
+
+  if (T.vol) {
+    const vs = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol" });
+    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    vs.setData(d.candles.map((k) => ({ time: k.t, value: k.v, color: k.c >= k.o ? "rgba(63,185,80,.35)" : "rgba(248,81,73,.35)" })));
+  }
+
+  if (T.sr) for (const z of d.sr_zones || []) {
+    candleSeries.createPriceLine({
+      price: z.mid, color: z.kind === "resistance" ? "#f85149" : "#3fb950",
+      lineWidth: Math.min(3, Math.max(1, Math.round(z.touches / 4))),
+      lineStyle: LS().Dashed, axisLabelVisible: true,
+      title: `${z.kind === "resistance" ? "R" : "S"} ×${z.touches}`,
+    });
+  }
+
+  if (T.vp && d.volume_profile && d.volume_profile.poc) {
+    const vp = d.volume_profile;
+    candleSeries.createPriceLine({ price: vp.poc, color: "#e3b341", lineWidth: 2, lineStyle: LS().Solid, axisLabelVisible: true, title: "POC" });
+    candleSeries.createPriceLine({ price: vp.value_area_high, color: "rgba(227,179,65,.5)", lineWidth: 1, lineStyle: LS().Dotted, axisLabelVisible: false, title: "VAH" });
+    candleSeries.createPriceLine({ price: vp.value_area_low, color: "rgba(227,179,65,.5)", lineWidth: 1, lineStyle: LS().Dotted, axisLabelVisible: false, title: "VAL" });
+  }
+
+  if (T.trend) for (const tl of d.trendlines || []) {
+    const col = tl.broken ? "rgba(248,81,73,.55)" : tl.kind === "up" ? "#3fb950" : "#f85149";
+    const s = chart.addLineSeries({ color: col, lineWidth: 1, lineStyle: tl.broken ? LS().Dotted : LS().Solid, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    s.setData(tl.points.map((p) => ({ time: p.t, value: p.price })));
+  }
+
+  const markers = [];
+  if (T.liq) {
+    for (const sw of (d.liquidity && d.liquidity.swings) || [])
+      markers.push({ time: sw.t, position: sw.kind === "high" ? "aboveBar" : "belowBar", color: "#6e7681", shape: "circle", text: "" });
+    for (const pool of (d.liquidity && d.liquidity.pools) || [])
+      candleSeries.createPriceLine({ price: pool.price, color: "rgba(139,148,158,.55)", lineWidth: 1, lineStyle: LS().Dashed, axisLabelVisible: false, title: `liq ${pool.kind} ×${pool.count}` });
+  }
+  if (T.div) for (const dv of d.divergences || []) {
+    const col = dv.kind === "bearish" ? "#f85149" : "#3fb950";
+    const b = dv.price[1];
+    markers.push({ time: b.t, position: dv.kind === "bearish" ? "aboveBar" : "belowBar", color: col, shape: dv.kind === "bearish" ? "arrowDown" : "arrowUp", text: "div " + (dv.kind === "bearish" ? "▼" : "▲") });
+    const ds = chart.addLineSeries({ color: col, lineWidth: 1, lineStyle: LS().LargeDashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    ds.setData(dv.price.map((p) => ({ time: p.t, value: p.v })));
+  }
+  for (const e of state.chartSignals || []) {
+    if (e.price == null) continue;
+    markers.push({
+      time: Math.floor(new Date(e.ts).getTime() / 1000),
+      position: e.kind === "exit" ? "aboveBar" : "belowBar",
+      color: e.kind === "exit" ? "#d29922" : "#3fb950",
+      shape: e.kind === "exit" ? "arrowDown" : "arrowUp",
+      text: (e.setup || e.kind || "").slice(0, 12),
+    });
+  }
+  if (markers.length) {
+    const seen = new Set();
+    candleSeries.setMarkers(
+      markers.sort((a, b) => a.time - b.time).filter((m) => {
+        const k = m.time + m.position + m.shape;
+        return seen.has(k) ? false : seen.add(k);
+      })
+    );
+  }
+
+  if (T.rsi && d.rsi && d.rsi.length) {
+    $("#rsiChart").hidden = false;
+    rsiChart = LightweightCharts.createChart($("#rsiChart"), {
+      layout: { background: { color: "#161b22" }, textColor: "#8b949e" },
+      grid: { vertLines: { color: "#21262d" }, horzLines: { color: "#21262d" } },
+      rightPriceScale: { borderColor: "#2b3240" },
+      timeScale: { borderColor: "#2b3240", visible: false },
+      height: 120,
+    });
+    const rs = rsiChart.addLineSeries({ color: "#58a6ff", lineWidth: 1, priceLineVisible: false, lastValueVisible: true });
+    rs.setData(d.rsi.map((p) => ({ time: p.t, value: p.value })));
+    rs.createPriceLine({ price: 70, color: "rgba(248,81,73,.4)", lineStyle: LS().Dashed, axisLabelVisible: true, title: "70" });
+    rs.createPriceLine({ price: 30, color: "rgba(63,185,80,.4)", lineStyle: LS().Dashed, axisLabelVisible: true, title: "30" });
+    if (T.div) for (const dv of d.divergences || []) {
+      const col = dv.kind === "bearish" ? "#f85149" : "#3fb950";
+      const rl = rsiChart.addLineSeries({ color: col, lineWidth: 1, lineStyle: LS().LargeDashed, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      rl.setData(dv.rsi.map((p) => ({ time: p.t, value: p.v })));
+    }
+    const link = (a, b) => a.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r) try { b.timeScale().setVisibleLogicalRange(r); } catch (e) {} });
+    link(chart, rsiChart); link(rsiChart, chart);
+  } else {
+    $("#rsiChart").hidden = true;
+  }
+
+  chart.timeScale().fitContent();
 }
 
 $("#modalClose").onclick = () => {
   $("#modalBg").classList.remove("show");
   modalSym = null;
-  if (chart) { chart.remove(); chart = null; }
+  if (chart) { try { chart.remove(); } catch (e) {} chart = null; }
+  if (rsiChart) { try { rsiChart.remove(); } catch (e) {} rsiChart = null; }
 };
 $("#modalBg").onclick = (e) => { if (e.target.id === "modalBg") $("#modalClose").onclick(); };
 
