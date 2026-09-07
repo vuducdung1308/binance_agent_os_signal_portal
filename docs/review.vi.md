@@ -11,6 +11,8 @@ một bàn điều khiển thời gian thực — và cắm thẳng khả năng 
 
 > Bản tiếng Anh của tài liệu này ở [`review.md`](review.md).
 
+![Dashboard — lưới thẻ coin với chỉ báo real-time và feed tín hiệu gần đây](img/dashboard.png)
+
 ---
 
 ## 1. Bối cảnh — vấn đề nó giải quyết
@@ -40,6 +42,9 @@ chỉ báo của bot**. Engine tín hiệu được import và chạy nguyên b�
 | Trend (EMA50 vs EMA200), sparkline 240 điểm giá gần nhất | SQLite snapshot mỗi 60s + buffer trong RAM |
 | Viền xanh = đang có tín hiệu · viền vàng = gần ra tín hiệu | so điều kiện engine |
 
+![Một thẻ coin — giá, RSI/ADX/MACD/volume, trend EMA, sparkline và dòng tóm tắt
+"WAITING"](img/coin-card.png)
+
 Đẩy dữ liệu qua **WebSocket** — không polling ở phía trình duyệt, cập nhật là push tức thì.
 
 **Watchlist** lưu trong SQLite; thêm/xóa coin ngay trên trang, **không cần restart**. Lần chạy
@@ -68,6 +73,9 @@ long_pullback                                    thiếu 2 điều kiện
   ✓ MACD > signal                               12.4 / 9.8
 ```
 
+![Panel điều kiện engine của một coin — từng cổng, pass/fail, kèm giá trị hiện
+tại](img/engine-conditions.png)
+
 Nó là **bản soi chiếu chỉ đọc** của đúng các cổng trong `compute_entry_signal` — import hằng số
 từ chính module đó, không tinh chỉnh lại gì. Portal còn chỉ ra setup "gần khớp nhất" và danh
 sách điều kiện còn thiếu.
@@ -92,6 +100,9 @@ phân tích — bật/tắt từng lớp, lựa chọn được nhớ trong `loc
 - **Ô RSI phụ** đồng bộ trục thời gian với chart chính, có đường 70/30.
 - **Marker tín hiệu** — các entry/exit trong lịch sử được chấm thẳng lên chart.
 
+![Chart trong modal coin với đầy đủ overlay — vùng S/R, trendline, phân kỳ RSI, thanh khoản,
+volume profile — và ô RSI phụ đồng bộ bên dưới](img/chart-overlays.png)
+
 Tất cả các lớp này là **công cụ vẽ hỗ trợ**, không đưa vào engine tín hiệu.
 
 ---
@@ -113,6 +124,8 @@ ngày), không phải bản viết lại.
 Kết quả hiển thị **2 cột cạnh nhau — Default vs Yours**: số lệnh, win rate, tổng R, R trung
 bình, profit factor, max drawdown (theo R), và tách nhỏ theo từng setup + danh sách lệnh.
 
+![Tab backtest — các tham số chỉnh được và bảng kết quả Default vs Yours](img/backtest.png)
+
 Có thể **lưu bộ tham số cho riêng từng coin** (vào SQLite). Đây thuần túy là what-if — **không
 đụng đến tín hiệu live hay bot đang chạy**. Mặc định của engine được xác nhận là byte-identical
 sau khi tham số hóa.
@@ -126,6 +139,9 @@ sau khi tham số hóa.
   nhãn nguồn. Có cờ để *không* đẩy lại các tín hiệu ingest từ file của bot (vì bot thật đã tự
   gửi rồi) — tránh double-notify.
 
+<!-- Thêm ảnh chụp một tin nhắn tín hiệu trong Telegram của bạn:
+![Tín hiệu đẩy sang Telegram](img/telegram.png) -->
+
 ---
 
 ## 7. Bot-health strip
@@ -135,6 +151,9 @@ báo cáo về chúng: đọc `launchctl list` cho 4 scheduler (`signals`, `watc
 — đang chạy không, exit code lần cuối là gì. Tín hiệu dừng sạch (SIGTERM khi reload/reboot) hiển
 thị `ok`; crash signal hiển thị vàng; không chạy hiển thị đỏ. Có fallback theo mtime của log
 khi launchctl không nói gì.
+
+![Header — trạng thái WebSocket, timeframe, nhịp poll và dải bot-health
+(signals / watch / news / hotmovers)](img/header.png)
 
 ---
 
@@ -148,6 +167,15 @@ chuyện với **một MCP endpoint duy nhất**: `https://agent.binance.com/mcp
 Portal gọi Anthropic Messages API với **MCP connector** trỏ tới Binance Agent OS. Một agent LLM
 (`claude-sonnet-5`) nhận **ý định có cấu trúc** ("market BUY $10 BTC, kèm SL/TP tham chiếu") và
 tự soạn lời gọi tool `spot_newOrder` với tham số đúng.
+
+```mermaid
+flowchart LR
+  U["Bạn — xác nhận lệnh"] --> P["Portal<br/>/api/trading/order"]
+  P --> A["Anthropic Messages API<br/>MCP connector"]
+  A --> M["Binance Agent OS<br/>agent.binance.com/mcp/agentic"]
+  M --> B[("Binance spot")]
+  P -. "guardrails + audit" .-> DB[("SQLite")]
+```
 
 ### Lợi ích cụ thể của Binance Agent OS ở đây
 
@@ -172,12 +200,17 @@ tự soạn lời gọi tool `spot_newOrder` với tham số đúng.
 - **Thủ công + xác nhận**: mọi lệnh hiện hộp xác nhận trước, **không có auto-execute**.
 - **`dry-run` là mặc định**: không có gì chạm mạng, mô phỏng khớp lệnh kèm mô hình phí.
 
+![Mọi lệnh đều phải xác nhận trước — không có gì tự chạy](img/order-confirm.png)
+
 ### Theo dõi P/L
 
 Bảng vị thế mở với nút Close, giá mark lấy từ ticker live, P/L chưa thực hiện + %. Lịch sử lệnh
 đã đóng có realized P/L. Và một **audit log đầy đủ**: mỗi lần gọi agent ghi lại intent, symbol,
 model, `stop_reason`, JSON các tool call, quyết định guardrail, text trả về, lỗi (nếu có). Có
 nút mua/đóng nhanh ngay trong modal coin.
+
+![Panel Trading — chế độ + guardrail, vị thế mở, form đặt lệnh, lệnh đã đóng và audit log của
+agent](img/trading.png)
 
 ---
 

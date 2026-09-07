@@ -11,6 +11,8 @@ the same page.*
 
 > A Vietnamese version of this document is at [`review.vi.md`](review.vi.md).
 
+![The dashboard — coin cards with live indicators and the recent-signals feed](img/dashboard.png)
+
 ---
 
 ## 1. Background — the problem it solves
@@ -41,6 +43,9 @@ bot's indicator math**. The signal engine is imported and run as-is.
 | Trend (EMA50 vs EMA200), a 240-point price sparkline | SQLite snapshot every 60 s + an in-RAM buffer |
 | Green border = a signal is live · amber border = close to a signal | engine-condition comparison |
 
+![A single coin card — price, RSI/ADX/MACD/volume, EMA trend, sparkline, and the
+"WAITING" condition summary](img/coin-card.png)
+
 Data is pushed over **WebSocket** — no polling in the browser, updates arrive as a push.
 
 **Watchlist** lives in SQLite; add/remove coins right on the page, **no restart**. On first run
@@ -69,6 +74,9 @@ long_pullback                                    missing 2 conditions
   ✓ MACD > signal                                12.4 / 9.8
 ```
 
+![The live engine-condition panel for one coin — every gate, pass/fail, with current
+values](img/engine-conditions.png)
+
 It is a **read-only mirror** of the exact gates in `compute_entry_signal` — it imports that
 module's constants, it does not re-tune anything. The portal also names the "closest" setup and
 lists the conditions it is still missing.
@@ -93,6 +101,9 @@ analytics layers on top — each layer toggles on/off, the choice is remembered 
 - **A synced RSI sub-pane** whose time axis tracks the main chart, with 70/30 lines.
 - **Signal markers** — historical entries/exits are plotted directly on the chart.
 
+![The coin modal chart with every overlay on — S/R zones, trendlines, RSI divergence,
+liquidity, volume profile — and the synced RSI sub-pane below](img/chart-overlays.png)
+
 All of these layers are **drawing aids** and never feed the signal engine.
 
 ---
@@ -115,6 +126,8 @@ The result shows **two columns side by side — Default vs Yours**: number of tr
 total R, average R, profit factor, max drawdown (in R), plus a per-setup breakdown and the
 trade list.
 
+![The backtest tab — tunable parameters and the Default vs Yours result table](img/backtest.png)
+
 You can **save a parameter set per coin** (to SQLite). This is purely what-if — it **does not
 touch the live signals or the running bot**. The engine's defaults were verified byte-identical
 after parameterization.
@@ -128,6 +141,9 @@ after parameterization.
   source tag. A flag controls whether signals *ingested* from the bot's `.txt` files are also
   pushed (the real bot already sends those) — no double-notify.
 
+<!-- Add your own screenshot of a signal message in Telegram:
+![A signal pushed to Telegram](img/telegram.png) -->
+
 ---
 
 ## 7. Bot-health strip
@@ -137,6 +153,9 @@ strip reporting on them: it reads `launchctl list` for the four schedulers (`sig
 `news`, `hotmovers`) — are they running, what was the last exit code. A clean stop signal
 (SIGTERM on reload/reboot) shows `ok`; a crash signal shows amber; not running shows red. There
 is a log-mtime fallback for when launchctl has nothing to say.
+
+![The header — WebSocket status, timeframe, poll cadence, and the bot-health strip
+(signals / watch / news / hotmovers)](img/header.png)
 
 ---
 
@@ -150,6 +169,15 @@ the portal talks to **a single MCP endpoint**: `https://agent.binance.com/mcp/ag
 The portal calls the Anthropic Messages API with an **MCP connector** pointed at Binance Agent
 OS. An LLM agent (`claude-sonnet-5`) takes a **structured intent** ("market BUY $10 of BTC, with
 reference SL/TP") and composes the `spot_newOrder` tool call with the right parameters itself.
+
+```mermaid
+flowchart LR
+  U["You — confirm the order"] --> P["Portal<br/>/api/trading/order"]
+  P --> A["Anthropic Messages API<br/>MCP connector"]
+  A --> M["Binance Agent OS<br/>agent.binance.com/mcp/agentic"]
+  M --> B[("Binance spot")]
+  P -. "guardrails + audit" .-> DB[("SQLite")]
+```
 
 ### Concrete benefits of Binance Agent OS here
 
@@ -174,12 +202,17 @@ reference SL/TP") and composes the `spot_newOrder` tool call with the right para
 - **Manual + confirm**: every order shows a confirm dialog first, **no auto-execution**.
 - **`dry-run` is the default**: nothing hits the network, a simulated fill with a fee model.
 
+![Every order is confirmed first — nothing is auto-executed](img/order-confirm.png)
+
 ### P/L tracking
 
 An open-positions table with a Close button, mark price from the live ticker, unrealised P/L +
 %. Closed-trade history with realised P/L. And a full **audit log**: every agent call records
 the intent, symbol, model, `stop_reason`, the tool-call JSON, the guardrail decision, the
 returned text, and any error. There are quick buy/close buttons right inside the coin modal.
+
+![The Trading panel — mode + guardrails, open positions, the order form, closed trades, and
+the agent audit log](img/trading.png)
 
 ---
 
