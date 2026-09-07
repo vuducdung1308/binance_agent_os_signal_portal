@@ -1,0 +1,99 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+  html,body{margin:0;padding:0}
+  #stage{width:1500px;height:600px;position:relative;overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:radial-gradient(1200px 700px at 78% 12%, #1a2130 0%, #0d1117 55%, #0a0d12 100%);}
+  .kick{position:absolute;left:72px;top:118px;font-size:24px;font-weight:700;letter-spacing:.34em;
+    color:#6e7bff;text-transform:uppercase}
+  .title{position:absolute;left:70px;top:150px;font-size:88px;font-weight:800;color:#f2f5f9;
+    letter-spacing:-.01em;line-height:1.04}
+  .tag{position:absolute;left:74px;top:330px;font-size:22px;line-height:1.7;color:#9aa4b1;max-width:600px}
+  .tag b{color:#d7dde5;font-weight:600}
+  .pills{position:absolute;left:74px;top:452px;display:flex;gap:10px;flex-wrap:wrap;max-width:620px}
+  .pill{font-size:14px;color:#aeb7c2;border:1px solid #2b3240;background:#161b22cc;
+    border-radius:999px;padding:6px 14px}
+  .pill.acc{color:#8b93ff;border-color:#3b3f7a}
+  .flow{position:absolute;left:74px;top:520px;display:flex;align-items:center;gap:12px;
+    font-size:14px;color:#8b949e}
+  .node{border:1px solid #2b3240;border-radius:8px;padding:6px 12px;background:#12171f;color:#c6ccd5}
+  .node.b{color:#f0b90b;border-color:#5a4b12}
+  .arrow{color:#4a5160}
+  svg{position:absolute;right:0;top:0}
+</style></head><body>
+<div id="stage">
+  <div class="kick">Binance Agent OS</div>
+  <div class="title">Signal Portal</div>
+  <div class="tag">
+    <b>Real-time</b> technical signals · engine-condition breakdown<br>
+    chart analytics · backtest lab<br>
+    <b>spot execution</b> via the Binance Agent OS MCP
+  </div>
+  <div class="pills">
+    <span class="pill">FastAPI + WebSocket</span>
+    <span class="pill">SQLite</span>
+    <span class="pill">lightweight-charts</span>
+    <span class="pill acc">MCP connector</span>
+  </div>
+  <div class="flow">
+    <span class="node">Portal</span><span class="arrow">→</span>
+    <span class="node acc" style="color:#8b93ff;border-color:#3b3f7a">Agent OS MCP</span><span class="arrow">→</span>
+    <span class="node b">Binance</span>
+  </div>
+  <svg width="760" height="600" viewBox="0 0 760 600" id="art"></svg>
+</div>
+<script>
+  const S = document.getElementById('art');
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (n,a)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+
+  // panel
+  S.appendChild(el('rect',{x:60,y:96,width:660,height:410,rx:18,fill:'#0f141c',stroke:'#232a36','stroke-width':1.5}));
+  // faint grid
+  for(let i=1;i<5;i++) S.appendChild(el('line',{x1:76,y1:120+i*70,x2:704,y2:120+i*70,stroke:'#1a212c','stroke-width':1}));
+
+  // price series (a pullback then rally — the "long pullback" setup)
+  const closes=[52,55,54,58,61,59,63,66,62,57,55,58,63,68,72,70,75,79,83,86,84,88];
+  const px0=88, pxStep=28, pyTop=126, pyBot=356;
+  const lo=Math.min(...closes)-6, hi=Math.max(...closes)+6;
+  const Y=v=>pyTop+(hi-v)/(hi-lo)*(pyBot-pyTop);
+  // S/R dashed
+  S.appendChild(el('line',{x1:76,y1:Y(hi-8),x2:704,y2:Y(hi-8),stroke:'#f85149','stroke-width':1.5,'stroke-dasharray':'7 6','opacity':.55}));
+  S.appendChild(el('line',{x1:76,y1:Y(lo+9),x2:704,y2:Y(lo+9),stroke:'#3fb950','stroke-width':1.5,'stroke-dasharray':'7 6','opacity':.5}));
+  // EMA line
+  let d='';
+  closes.forEach((c,i)=>{const x=px0+i*pxStep; const y=Y((closes[Math.max(0,i-2)]+closes[Math.max(0,i-1)]+c)/3);
+    d+=(i?'L':'M')+x+' '+y+' ';});
+  S.appendChild(el('path',{d,fill:'none',stroke:'#58a6ff','stroke-width':2.5,'opacity':.85}));
+  // candles
+  closes.forEach((c,i)=>{
+    const o=i? closes[i-1] : c-1;
+    const up=c>=o;
+    const x=px0+i*pxStep;
+    const yO=Y(o), yC=Y(c);
+    const top=Math.min(yO,yC), h=Math.max(4,Math.abs(yO-yC));
+    const wickH=Y(Math.max(o,c)+3), wickL=Y(Math.min(o,c)-3);
+    const col=up?'#3fb950':'#f85149';
+    S.appendChild(el('line',{x1:x,y1:wickH,x2:x,y2:wickL,stroke:col,'stroke-width':2,'opacity':.9}));
+    S.appendChild(el('rect',{x:x-8,y:top,width:16,height:h,rx:2,fill:col,'opacity':up?.95:.9}));
+  });
+  // signal marker at the pullback low (index 9)
+  const sx=px0+9*pxStep, sy=Y(closes[9]);
+  S.appendChild(el('path',{d:`M${sx} ${sy+34} l10 20 l-20 0 z`,fill:'#3fb950'}));
+  S.appendChild(el('circle',{cx:sx,cy:sy,r:6,fill:'none',stroke:'#3fb950','stroke-width':2.5}));
+  const g=el('g',{});
+  g.appendChild(el('rect',{x:sx-30,y:sy+58,width:60,height:26,rx:13,fill:'#0f141c',stroke:'#3fb950','stroke-width':1.5}));
+  const t=el('text',{x:sx,y:sy+76,'text-anchor':'middle','font-size':14,'font-weight':700,fill:'#3fb950',
+    'font-family':'-apple-system,Segoe UI,Roboto,sans-serif'}); t.textContent='LONG';
+  g.appendChild(t); S.appendChild(g);
+
+  // RSI sub-pane
+  S.appendChild(el('line',{x1:76,y1:404,x2:704,y2:404,stroke:'#232a36','stroke-width':1}));
+  const rsi=[46,52,49,58,63,55,60,66,54,38,33,41,52,64,71,66,73,78,74,69,58,63];
+  const rY=v=>470-(v/100)*84;
+  S.appendChild(el('line',{x1:76,y1:rY(70),x2:704,y2:rY(70),stroke:'#f85149','stroke-width':1,'stroke-dasharray':'4 5','opacity':.4}));
+  S.appendChild(el('line',{x1:76,y1:rY(30),x2:704,y2:rY(30),stroke:'#3fb950','stroke-width':1,'stroke-dasharray':'4 5','opacity':.4}));
+  let rd='';
+  rsi.forEach((v,i)=>{rd+=(i?'L':'M')+(px0+i*pxStep)+' '+rY(v)+' ';});
+  S.appendChild(el('path',{d:rd,fill:'none',stroke:'#6e7bff','stroke-width':2.5}));
+</script>
+</body></html>

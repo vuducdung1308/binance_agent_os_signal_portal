@@ -1,5 +1,7 @@
 # Binance Agent OS Signal Portal — Review chi tiết
 
+![Binance Agent OS Signal Portal](img/banner.png)
+
 *Một dashboard local, mã nguồn tự chứa, biến bot tín hiệu kỹ thuật "chỉ bắn Telegram" thành
 một bàn điều khiển thời gian thực — và cắm thẳng khả năng **đặt lệnh spot qua Binance Agent OS
 (MCP)** vào cùng một trang.*

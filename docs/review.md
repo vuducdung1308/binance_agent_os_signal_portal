@@ -1,5 +1,7 @@
 # Binance Agent OS Signal Portal — a detailed review
 
+![Binance Agent OS Signal Portal](img/banner.png)
+
 *A local, self-contained dashboard that turns a "Telegram-only" technical-signal bot into a
 real-time control panel — and wires **spot order execution via Binance Agent OS (MCP)** into
 the same page.*
