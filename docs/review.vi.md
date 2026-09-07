@@ -1,6 +1,6 @@
 # Binance Agent OS Signal Portal — Review chi tiết
 
-![Binance Agent OS Signal Portal](img/banner.png)
+![Binance Agent OS Signal Portal](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/banner.png)
 
 *Một dashboard local, mã nguồn tự chứa, biến bot tín hiệu kỹ thuật "chỉ bắn Telegram" thành
 một bàn điều khiển thời gian thực — và cắm thẳng khả năng **đặt lệnh spot qua Binance Agent OS
@@ -13,7 +13,7 @@ một bàn điều khiển thời gian thực — và cắm thẳng khả năng 
 
 > Bản tiếng Anh của tài liệu này ở [`review.md`](review.md).
 
-![Dashboard — lưới thẻ coin với chỉ báo real-time và feed tín hiệu gần đây](img/dashboard.png)
+![Dashboard — lưới thẻ coin với chỉ báo real-time và feed tín hiệu gần đây](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/dashboard.png)
 
 ---
 
@@ -45,7 +45,7 @@ chỉ báo của bot**. Engine tín hiệu được import và chạy nguyên b�
 | Viền xanh = đang có tín hiệu · viền vàng = gần ra tín hiệu | so điều kiện engine |
 
 ![Một thẻ coin — giá, RSI/ADX/MACD/volume, trend EMA, sparkline và dòng tóm tắt
-"WAITING"](img/coin-card.png)
+"WAITING"](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/coin-card.png)
 
 Đẩy dữ liệu qua **WebSocket** — không polling ở phía trình duyệt, cập nhật là push tức thì.
 
@@ -76,7 +76,7 @@ long_pullback                                    thiếu 2 điều kiện
 ```
 
 ![Panel điều kiện engine của một coin — từng cổng, pass/fail, kèm giá trị hiện
-tại](img/engine-conditions.png)
+tại](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/engine-conditions.png)
 
 Nó là **bản soi chiếu chỉ đọc** của đúng các cổng trong `compute_entry_signal` — import hằng số
 từ chính module đó, không tinh chỉnh lại gì. Portal còn chỉ ra setup "gần khớp nhất" và danh
@@ -103,7 +103,7 @@ phân tích — bật/tắt từng lớp, lựa chọn được nhớ trong `loc
 - **Marker tín hiệu** — các entry/exit trong lịch sử được chấm thẳng lên chart.
 
 ![Chart trong modal coin với đầy đủ overlay — vùng S/R, trendline, phân kỳ RSI, thanh khoản,
-volume profile — và ô RSI phụ đồng bộ bên dưới](img/chart-overlays.png)
+volume profile — và ô RSI phụ đồng bộ bên dưới](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/chart-overlays.png)
 
 Tất cả các lớp này là **công cụ vẽ hỗ trợ**, không đưa vào engine tín hiệu.
 
@@ -126,7 +126,7 @@ ngày), không phải bản viết lại.
 Kết quả hiển thị **2 cột cạnh nhau — Default vs Yours**: số lệnh, win rate, tổng R, R trung
 bình, profit factor, max drawdown (theo R), và tách nhỏ theo từng setup + danh sách lệnh.
 
-![Tab backtest — các tham số chỉnh được và bảng kết quả Default vs Yours](img/backtest.png)
+![Tab backtest — các tham số chỉnh được và bảng kết quả Default vs Yours](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/backtest.png)
 
 Có thể **lưu bộ tham số cho riêng từng coin** (vào SQLite). Đây thuần túy là what-if — **không
 đụng đến tín hiệu live hay bot đang chạy**. Mặc định của engine được xác nhận là byte-identical
@@ -142,7 +142,7 @@ sau khi tham số hóa.
   gửi rồi) — tránh double-notify.
 
 <!-- Thêm ảnh chụp một tin nhắn tín hiệu trong Telegram của bạn:
-![Tín hiệu đẩy sang Telegram](img/telegram.png) -->
+![Tín hiệu đẩy sang Telegram](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/telegram.png) -->
 
 ---
 
@@ -155,7 +155,7 @@ thị `ok`; crash signal hiển thị vàng; không chạy hiển thị đỏ. C
 khi launchctl không nói gì.
 
 ![Header — trạng thái WebSocket, timeframe, nhịp poll và dải bot-health
-(signals / watch / news / hotmovers)](img/header.png)
+(signals / watch / news / hotmovers)](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/header.png)
 
 ---
 
@@ -202,7 +202,7 @@ flowchart LR
 - **Thủ công + xác nhận**: mọi lệnh hiện hộp xác nhận trước, **không có auto-execute**.
 - **`dry-run` là mặc định**: không có gì chạm mạng, mô phỏng khớp lệnh kèm mô hình phí.
 
-![Mọi lệnh đều phải xác nhận trước — không có gì tự chạy](img/order-confirm.png)
+![Mọi lệnh đều phải xác nhận trước — không có gì tự chạy](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/order-confirm.png)
 
 ### Theo dõi P/L
 
@@ -212,7 +212,7 @@ model, `stop_reason`, JSON các tool call, quyết định guardrail, text trả
 nút mua/đóng nhanh ngay trong modal coin.
 
 ![Panel Trading — chế độ + guardrail, vị thế mở, form đặt lệnh, lệnh đã đóng và audit log của
-agent](img/trading.png)
+agent](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/trading.png)
 
 ---
 

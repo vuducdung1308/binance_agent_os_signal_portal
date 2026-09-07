@@ -1,6 +1,6 @@
 # Binance Agent OS Signal Portal — a detailed review
 
-![Binance Agent OS Signal Portal](img/banner.png)
+![Binance Agent OS Signal Portal](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/banner.png)
 
 *A local, self-contained dashboard that turns a "Telegram-only" technical-signal bot into a
 real-time control panel — and wires **spot order execution via Binance Agent OS (MCP)** into
@@ -13,7 +13,7 @@ the same page.*
 
 > A Vietnamese version of this document is at [`review.vi.md`](review.vi.md).
 
-![The dashboard — coin cards with live indicators and the recent-signals feed](img/dashboard.png)
+![The dashboard — coin cards with live indicators and the recent-signals feed](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/dashboard.png)
 
 ---
 
@@ -46,7 +46,7 @@ bot's indicator math**. The signal engine is imported and run as-is.
 | Green border = a signal is live · amber border = close to a signal | engine-condition comparison |
 
 ![A single coin card — price, RSI/ADX/MACD/volume, EMA trend, sparkline, and the
-"WAITING" condition summary](img/coin-card.png)
+"WAITING" condition summary](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/coin-card.png)
 
 Data is pushed over **WebSocket** — no polling in the browser, updates arrive as a push.
 
@@ -77,7 +77,7 @@ long_pullback                                    missing 2 conditions
 ```
 
 ![The live engine-condition panel for one coin — every gate, pass/fail, with current
-values](img/engine-conditions.png)
+values](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/engine-conditions.png)
 
 It is a **read-only mirror** of the exact gates in `compute_entry_signal` — it imports that
 module's constants, it does not re-tune anything. The portal also names the "closest" setup and
@@ -104,7 +104,7 @@ analytics layers on top — each layer toggles on/off, the choice is remembered 
 - **Signal markers** — historical entries/exits are plotted directly on the chart.
 
 ![The coin modal chart with every overlay on — S/R zones, trendlines, RSI divergence,
-liquidity, volume profile — and the synced RSI sub-pane below](img/chart-overlays.png)
+liquidity, volume profile — and the synced RSI sub-pane below](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/chart-overlays.png)
 
 All of these layers are **drawing aids** and never feed the signal engine.
 
@@ -128,7 +128,7 @@ The result shows **two columns side by side — Default vs Yours**: number of tr
 total R, average R, profit factor, max drawdown (in R), plus a per-setup breakdown and the
 trade list.
 
-![The backtest tab — tunable parameters and the Default vs Yours result table](img/backtest.png)
+![The backtest tab — tunable parameters and the Default vs Yours result table](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/backtest.png)
 
 You can **save a parameter set per coin** (to SQLite). This is purely what-if — it **does not
 touch the live signals or the running bot**. The engine's defaults were verified byte-identical
@@ -144,7 +144,7 @@ after parameterization.
   pushed (the real bot already sends those) — no double-notify.
 
 <!-- Add your own screenshot of a signal message in Telegram:
-![A signal pushed to Telegram](img/telegram.png) -->
+![A signal pushed to Telegram](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/telegram.png) -->
 
 ---
 
@@ -157,7 +157,7 @@ strip reporting on them: it reads `launchctl list` for the four schedulers (`sig
 is a log-mtime fallback for when launchctl has nothing to say.
 
 ![The header — WebSocket status, timeframe, poll cadence, and the bot-health strip
-(signals / watch / news / hotmovers)](img/header.png)
+(signals / watch / news / hotmovers)](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/header.png)
 
 ---
 
@@ -204,7 +204,7 @@ flowchart LR
 - **Manual + confirm**: every order shows a confirm dialog first, **no auto-execution**.
 - **`dry-run` is the default**: nothing hits the network, a simulated fill with a fee model.
 
-![Every order is confirmed first — nothing is auto-executed](img/order-confirm.png)
+![Every order is confirmed first — nothing is auto-executed](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/order-confirm.png)
 
 ### P/L tracking
 
@@ -214,7 +214,7 @@ the intent, symbol, model, `stop_reason`, the tool-call JSON, the guardrail deci
 returned text, and any error. There are quick buy/close buttons right inside the coin modal.
 
 ![The Trading panel — mode + guardrails, open positions, the order form, closed trades, and
-the agent audit log](img/trading.png)
+the agent audit log](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/trading.png)
 
 ---
 
