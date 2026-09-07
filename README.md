@@ -20,11 +20,11 @@ WebSocket, and keeps its own history in SQLite. The bot keeps running exactly as
 
 ## Table of contents
 
+- [Installation](#installation)
 - [What it does](#what-it-does)
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [The bot dependency (`BOT_ROOT` contract)](#the-bot-dependency-bot_root-contract)
-- [Quick start](#quick-start)
 - [Step-by-step replication](#step-by-step-replication)
 - [How it works](#how-it-works)
 - [Configuration reference](#configuration-reference)
@@ -34,6 +34,56 @@ WebSocket, and keeps its own history in SQLite. The bot keeps running exactly as
 - [Project layout](#project-layout)
 - [Troubleshooting](#troubleshooting)
 - [Limitations & non-goals](#limitations--non-goals)
+
+---
+
+## Installation
+
+**Requirements:** Python 3.9+, macOS or Linux (`bash` + `lsof`). No Binance API key, no
+Anthropic key, no separate bot checkout — the bot's engine is bundled in `bot/`.
+
+```bash
+git clone https://github.com/vuducdung1308/binance_agent_os_signal_portal.git
+cd binance_agent_os_signal_portal
+./run.sh
+```
+
+`run.sh` creates `.venv`, installs the four Python deps, frees the port, then starts the
+server. Open **<http://127.0.0.1:8777>**. First launch seeds the SQLite DB and a default
+watchlist; cards fill in within ~30 s.
+
+<details><summary>SSH clone / manual start / Windows</summary>
+
+```bash
+# SSH (needs a key on your GitHub account)
+git clone git@github.com:vuducdung1308/binance_agent_os_signal_portal.git
+
+# start without run.sh (also the Windows path)
+python3 -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python -m portal.app
+```
+</details>
+
+**Update to the latest version:**
+
+```bash
+git pull
+./run.sh    # or, if the LaunchAgent is installed:
+            # launchctl kickstart -k gui/$(id -u)/com.binance-agent-os.signal-portal
+```
+
+**Optional extras** — each independent, all off by default:
+
+| Want | Do |
+|---|---|
+| Auto‑start on every login / reboot (macOS) | `./deploy/install-launchagent.sh` |
+| Telegram message on every detected signal | set `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` in `.env` |
+| Visualise your **own** Binansquare bot (its live positions + signals) | set `BOT_ROOT=/abs/path` in `.env` |
+| Place real spot orders + track P/L | follow [docs/trading.md](docs/trading.md) |
+
+Settings live in `.env` (`cp .env.example .env`); every one has a working default — see
+[Configuration reference](#configuration-reference).
 
 ---
 
@@ -146,20 +196,11 @@ the rest of the portal works.
 
 ---
 
-## Quick start
-
-```bash
-git clone https://github.com/vuducdung1308/binance_agent_os_signal_portal.git
-cd binance_agent_os_signal_portal
-./run.sh                     # creates .venv, installs deps, starts on :8777
-```
-
-Open <http://127.0.0.1:8777>. The bot's engine is bundled in `bot/`, so there is nothing
-else to install or configure.
-
----
-
 ## Step-by-step replication
+
+> The short version is [Installation](#installation) above. This section is the annotated
+> walk‑through — what each step does and why.
+
 
 ### 1. Get the code
 
