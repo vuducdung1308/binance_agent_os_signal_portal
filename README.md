@@ -479,7 +479,10 @@ backtest — never the live engine or the portal's own paper positions.
 │   ├── notify.py       # Telegram push for detected signals
 │   ├── trading.py      # guardrails + dry-run + live executor (Claude + MCP) + P/L
 │   └── settings.py     # env-driven PortalSettings
-├── docs/trading.md     # how to enable + authorize live trading
+├── docs/
+│   ├── trading.md      # how to enable + authorize live trading
+│   ├── review.md       # detailed feature review (English)
+│   └── review.vi.md    # detailed feature review (Vietnamese)
 ├── static/
 │   ├── index.html      # single page, no framework
 │   ├── app.js          # dashboard, WS client, modal, backtest form, trading panel
