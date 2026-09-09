@@ -71,8 +71,8 @@ async def lifespan(_app: FastAPI):
     )
     tc = trading.cfg
     log.info(
-        "Trading: mode=%s  live_ready=%s  model=%s  limits=%sUSDT/order, %s/day, -%sUSDT/day, %s pos%s",
-        tc.mode, tc.live_ready, tc.anthropic_model,
+        "Trading: mode=%s  executor=%s  live_ready=%s  model=%s  limits=%sUSDT/order, %s/day, -%sUSDT/day, %s pos%s",
+        tc.mode, tc.executor, tc.live_ready, tc.anthropic_model,
         tc.limits.max_notional_per_order_usdt, tc.limits.max_orders_per_day,
         tc.limits.daily_loss_limit_usdt, tc.limits.max_open_positions,
         "  [KILL_SWITCH env ON]" if tc.env_kill_switch else "",

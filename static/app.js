@@ -1104,8 +1104,11 @@ function renderTrade(st) {
   const lim = st.limits;
   const readyLine =
     st.mode === "live"
-      ? `Anthropic key ${st.anthropic_configured ? "✓" : "✗"} · MCP OAuth ${st.oauth_configured ? "✓" : "✗"} · model ${st.model}` +
-        (st.live_ready ? "" : ' — <b class="down">not ready</b>, set the env vars (see docs/trading.md)')
+      ? (st.executor === "claude-cli"
+          ? `Executor <b>claude CLI</b> → MCP <code>${st.mcp_server_name || "binance-mcp-server"}</code> (auth managed by Claude Code; uses your Claude usage)` +
+            (st.live_ready ? "" : ' — <b class="down">claude not found</b>, set CLAUDE_CLI_BIN')
+          : `Anthropic key ${st.anthropic_configured ? "✓" : "✗"} · MCP OAuth ${st.oauth_configured ? "✓" : "✗"} · model ${st.model}` +
+            (st.live_ready ? "" : ' — <b class="down">not ready</b>, set the env vars (see docs/trading.md)'))
       : "Simulated fills at the reference price minus a taker fee. No network, no order.";
   $("#tradeStatus").innerHTML = `
     <div class="mini">

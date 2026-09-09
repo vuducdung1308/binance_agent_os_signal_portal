@@ -9,12 +9,13 @@ lets the portal place the order itself after a countdown you can cancel.
 
 - **dry-run** (default): a fill is simulated at the current reference price minus a taker
   fee. Nothing hits the network. Use it to exercise the whole flow safely.
-- **live**: the portal asks **Claude** (Anthropic Messages API) to place the exact order
-  through the **Binance Agent OS MCP** connector
-  (`https://agent.binance.com/mcp/agentic`), with a default-deny toolset that allow-lists
-  only `spot_newOrder`, `spot_getAccount`, `spot_tickerPrice`, `spot_getOpenOrders`,
-  `spot_getOrder`. Withdrawals, transfers, futures, margin, and unrelated cancels are not
-  reachable.
+- **live**: the portal asks **Claude** to place the exact order through the **Binance Agent
+  OS MCP** (`https://agent.binance.com/mcp/agentic`), allow-listing only `spot_newOrder`,
+  `spot_getAccount`, `spot_tickerPrice`, `spot_getOpenOrders`, `spot_getOrder`. Withdrawals,
+  transfers, futures, margin, and unrelated cancels are not reachable. Two executors
+  (`TRADE_EXECUTOR`): **`claude-cli`** shells out to the `claude` CLI and reuses an MCP
+  server you authenticated in Claude Code (no API key, no raw token); **`anthropic-api`**
+  calls the Anthropic Messages API directly with `ANTHROPIC_API_KEY` + a raw OAuth token.
 
 Guardrails (`portal/trading.py`) are the single choke point before any order:
 
@@ -29,6 +30,39 @@ The kill switch (env `KILL_SWITCH` or the manual toggle in the Trading panel) bl
 **OPEN**s. **CLOSE** is always allowed so a position can be flattened.
 
 ## Turning it on
+
+Two executors place the live order. Pick one with `TRADE_EXECUTOR`.
+
+### Executor A — `claude-cli` (recommended: no API key, no raw token)
+
+If you already use the Binance Agent OS MCP inside **Claude Code**, the portal can reuse
+that. Claude Code holds the OAuth token (in the OS keychain) and refreshes it; the portal
+just shells out to `claude` for each order.
+
+1. Register the MCP server at **user scope** so it works from any directory:
+   ```bash
+   claude mcp add -s user binance-mcp-server --transport http https://agent.binance.com/mcp/agentic
+   ```
+2. Authenticate it once: run `claude`, then `/mcp` → `binance-mcp-server` → **Authenticate**
+   (log in to Binance, pick the **sub-account**, consent). `claude mcp list` should show it
+   **✓ Connected**.
+3. In `.env`:
+   ```bash
+   TRADE_MODE=live
+   TRADE_EXECUTOR=claude-cli
+   BINANCE_MCP_SERVER_NAME=binance-mcp-server
+   CLAUDE_CLI_BIN=/absolute/path/to/claude   # `command -v claude` — needed because a
+                                             # LaunchAgent has a minimal PATH
+   ```
+4. Restart. The portal runs, per order:
+   `claude -p "<order>" --output-format stream-json --allowedTools mcp__binance-mcp-server__spot_newOrder,…`
+   Only the five spot order/query tools are pre-approved; anything else is denied
+   non-interactively. Each order consumes your Claude usage (a few cents).
+
+Then skip to **Verify scopes** below. Steps 1–3 under Executor B are only for the
+`anthropic-api` path.
+
+### Executor B — `anthropic-api` (`TRADE_EXECUTOR=anthropic-api`)
 
 ### 1. Get an OAuth token for a sub-account
 

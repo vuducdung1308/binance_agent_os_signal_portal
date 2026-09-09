@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -99,14 +101,43 @@ class TradingConfig:
     auto_execute: bool = False
     auto_allow_live: bool = False
     auto_delay_sec: int = 30
+    # Executor for TRADE_MODE=live:
+    #   "anthropic-api" — call the Anthropic API directly (needs ANTHROPIC_API_KEY +
+    #                     BINANCE_AGENT_OAUTH_TOKEN)
+    #   "claude-cli"    — shell out to the `claude` CLI, reusing an MCP server already
+    #                     authenticated in Claude Code (`claude mcp add -s user …`).
+    #                     No API key, no raw token needed.
+    executor: str = "anthropic-api"
+    claude_bin: str = "claude"
+    claude_cwd: str = ""
+    mcp_server_name: str = "binance-mcp-server"
 
     @property
     def live_ready(self) -> bool:
+        if self.executor == "claude-cli":
+            return bool(self.claude_bin)
         return bool(self.anthropic_api_key and self.oauth_token)
+
+
+def _resolve_claude_bin() -> str:
+    v = os.environ.get("CLAUDE_CLI_BIN", "").strip()
+    if v:
+        return v
+    found = shutil.which("claude")
+    if found:
+        return found
+    for c in ("~/.local/bin/claude", "~/.claude/local/claude"):
+        p = os.path.expanduser(c)
+        if os.path.exists(p):
+            return p
+    return "claude"
 
 
 def load_trading_config() -> TradingConfig:
     mode = "live" if os.environ.get("TRADE_MODE", "").strip().lower() == "live" else "dry-run"
+    executor = ("claude-cli"
+                if os.environ.get("TRADE_EXECUTOR", "").strip().lower() == "claude-cli"
+                else "anthropic-api")
     return TradingConfig(
         mode=mode,
         env_kill_switch=_bool("KILL_SWITCH", False),
@@ -132,6 +163,10 @@ def load_trading_config() -> TradingConfig:
         auto_execute=_bool("TRADE_AUTO_ON_SIGNAL", False),
         auto_allow_live=_bool("TRADE_AUTO_ALLOW_LIVE", False),
         auto_delay_sec=max(3, int(_num("TRADE_AUTO_DELAY_SEC", 30.0, 600.0))),
+        executor=executor,
+        claude_bin=_resolve_claude_bin(),
+        claude_cwd=os.environ.get("CLAUDE_CLI_CWD", "").strip(),
+        mcp_server_name=os.environ.get("BINANCE_MCP_SERVER_NAME", "").strip() or "binance-mcp-server",
     )
 
 
@@ -327,6 +362,82 @@ def live_execute(cfg: TradingConfig, order: ProposedOrder) -> Dict[str, Any]:
         return {"status": "error", "mode": "live", "error": str(exc)}
 
 
+# ------------------------------------------------ live (claude CLI + Claude Code MCP)
+def _parse_cli_stream(stdout: str, server: str) -> Tuple[List[dict], str, Optional[bool]]:
+    """Parse `claude -p --output-format stream-json --verbose` NDJSON into the same
+    tool-call shape the Anthropic-API path produces (name without the mcp__ prefix,
+    result_text, is_error), plus the final result text and its is_error flag."""
+    prefix = f"mcp__{server}__"
+    calls: Dict[str, dict] = {}
+    final_text, final_err = "", None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        t = ev.get("type")
+        if t == "assistant":
+            for b in (ev.get("message") or {}).get("content") or []:
+                if b.get("type") == "tool_use":
+                    name = b.get("name") or ""
+                    calls[str(b.get("id"))] = {
+                        "name": name[len(prefix):] if name.startswith(prefix) else name,
+                        "server_name": server,
+                        "input": b.get("input"),
+                    }
+        elif t == "user":
+            for b in (ev.get("message") or {}).get("content") or []:
+                if b.get("type") == "tool_result":
+                    ref = calls.get(str(b.get("tool_use_id")))
+                    if ref is not None:
+                        ref["is_error"] = bool(b.get("is_error"))
+                        c = b.get("content")
+                        ref["result_text"] = c if isinstance(c, str) else json.dumps(c)
+        elif t == "result":
+            final_text = ev.get("result") or ""
+            final_err = ev.get("is_error")
+    return list(calls.values()), final_text.strip(), final_err
+
+
+def cli_execute(cfg: "TradingConfig", order: ProposedOrder) -> Dict[str, Any]:
+    """Blocking — run via asyncio.to_thread. Delegates the order to the `claude` CLI,
+    which talks to the Binance MCP server you authenticated in Claude Code. Only the
+    allow-listed spot tools are pre-approved; everything else is denied non-interactively."""
+    tools = ",".join(f"mcp__{cfg.mcp_server_name}__{t}" for t in ALLOWLISTED_MCP_TOOLS)
+    cmd = [
+        cfg.claude_bin, "-p", _user_message(order),
+        "--output-format", "stream-json", "--verbose",
+        "--allowedTools", tools,
+        "--append-system-prompt", _system_prompt(order.symbol, cfg.limits),
+        "--permission-mode", "default",
+    ]
+    try:
+        r = subprocess.run(
+            cmd,
+            cwd=(os.path.expanduser(cfg.claude_cwd) if cfg.claude_cwd else None),
+            capture_output=True, text=True, timeout=180,
+        )
+    except FileNotFoundError:
+        return {"status": "error", "mode": "live",
+                "error": f"claude CLI not found ({cfg.claude_bin}) — set CLAUDE_CLI_BIN"}
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "mode": "live", "error": "claude CLI timed out (180s)"}
+
+    tool_calls, text, final_err = _parse_cli_stream(r.stdout, cfg.mcp_server_name)
+    if not tool_calls and (r.returncode != 0 or final_err):
+        msg = (r.stderr or text or r.stdout or "").strip()[:400]
+        return {"status": "error", "mode": "live", "error": msg or f"claude exited {r.returncode}"}
+    placed = any(tc.get("name") == "spot_newOrder" and not tc.get("is_error") for tc in tool_calls)
+    return {
+        "status": "executed" if placed else "no-op",
+        "mode": "live", "model": "claude-cli", "stop_reason": None,
+        "tool_calls": tool_calls, "text": text,
+    }
+
+
 class TradingService:
     """Ties config + store + guardrails + executor together for the API layer.
 
@@ -361,9 +472,11 @@ class TradingService:
         return {
             "mode": self.cfg.mode,
             "live_ready": self.cfg.live_ready,
+            "executor": self.cfg.executor,
+            "mcp_server_name": self.cfg.mcp_server_name,
             "anthropic_configured": bool(self.cfg.anthropic_api_key),
             "oauth_configured": bool(self.cfg.oauth_token),
-            "model": self.cfg.anthropic_model,
+            "model": "claude-cli" if self.cfg.executor == "claude-cli" else self.cfg.anthropic_model,
             "mcp_url": self.cfg.mcp_url,
             "kill_switch": st["killed"] or self.cfg.env_kill_switch,
             "kill_switch_manual": st["killed"],
@@ -452,7 +565,8 @@ class TradingService:
             return {"status": "blocked", "reasons": gr["reasons"], "order": _order_public(order)}
 
         if self.cfg.mode == "live":
-            result = live_execute(self.cfg, order)
+            result = (cli_execute(self.cfg, order) if self.cfg.executor == "claude-cli"
+                      else live_execute(self.cfg, order))
         else:
             fill = dry_run_fill(order)
             result = {"status": "dry-run", "mode": "dry-run", "fill": fill,

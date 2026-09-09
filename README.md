@@ -383,8 +383,10 @@ All optional. Set via `.env` in the project root or as environment variables (en
 | `TRADE_AUTO_ON_SIGNAL` | `0` | Master switch for auto-execute on signals. Still needs the *Armed* toggle in the Trading panel. |
 | `TRADE_AUTO_DELAY_SEC` | `30` | Cancellable countdown before an armed auto order fires (3–600). |
 | `TRADE_AUTO_ALLOW_LIVE` | `0` | Second gate: auto only fires in `live` mode when this is also `1`. |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | *(none)* / `claude-sonnet-5` | Execution agent (live mode only). |
-| `BINANCE_AGENT_MCP_URL` / `BINANCE_AGENT_OAUTH_TOKEN` | `…/mcp/agentic` / *(none)* | The MCP connector + a sub-account OAuth token (live mode only — see [docs/trading.md](docs/trading.md)). |
+| `TRADE_EXECUTOR` | `anthropic-api` | `claude-cli` = shell out to the `claude` CLI, reusing an MCP server you authed in Claude Code (no API key / token). `anthropic-api` = call the Anthropic API directly. |
+| `BINANCE_MCP_SERVER_NAME` / `CLAUDE_CLI_BIN` / `CLAUDE_CLI_CWD` | `binance-mcp-server` / auto / *(portal dir)* | `claude-cli` executor: the registered MCP server name, the `claude` binary path (set an absolute path for LaunchAgents), and an optional working dir. |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | *(none)* / `claude-sonnet-5` | `anthropic-api` executor only. |
+| `BINANCE_AGENT_MCP_URL` / `BINANCE_AGENT_OAUTH_TOKEN` | `…/mcp/agentic` / *(none)* | `anthropic-api` executor: the MCP connector + a sub-account OAuth token (see [docs/trading.md](docs/trading.md)). |
 | `PYTHON` | `python3` | Interpreter `run.sh` uses to create `.venv`. |
 
 ---
