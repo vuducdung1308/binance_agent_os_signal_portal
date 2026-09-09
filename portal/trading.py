@@ -37,8 +37,8 @@ MAX_PAUSE_CONTINUES = 3
 DRY_RUN_FEE_PER_SIDE = 0.001  # taker fee per side, for dry-run P/L estimates
 # A market BUY credits `executedQty` minus the taker fee (often paid in the bought
 # asset), so the free balance is slightly below what we recorded. Shave the CLOSE
-# quantity so the SELL never exceeds the free balance; the dust left behind is tiny.
-CLOSE_QTY_HAIRCUT = 0.0015
+# quantity by ~the fee; the agent then fits to the real free balance and LOT_SIZE.
+CLOSE_QTY_HAIRCUT = 0.001
 
 # MCP tools the execution agent may call. Everything else on the Binance MCP server
 # (withdraw, transfer, futures, margin, unrelated cancels…) is denied by default.
@@ -48,6 +48,7 @@ ALLOWLISTED_MCP_TOOLS = (
     "spot_tickerPrice",
     "spot_getOpenOrders",
     "spot_getOrder",
+    "spot_exchangeInfo",   # read-only — lets the agent get LOT_SIZE / MIN_NOTIONAL
 )
 
 # Reference (hackathon) hard limits + absolute ceilings env cannot exceed.
@@ -250,11 +251,13 @@ def _system_prompt(symbol: str, limits: Limits, intent: str = "OPEN") -> str:
     ]
     if intent == "CLOSE":
         lines += [
-            "- This is a CLOSE (SELL to flatten). Call spot_getAccount first. If the free",
-            "  balance of the base asset is BELOW the requested quantity (fees/dust), place",
-            "  the SELL for the full free balance instead, rounded DOWN to the symbol's",
-            "  LOT_SIZE step. Never sell more than the free balance. Never buy.",
-            "  If the remainder is below MIN_NOTIONAL, sell what is sellable and say so.",
+            "- This is a CLOSE (SELL to flatten). First call spot_getAccount for the free",
+            "  base balance and spot_exchangeInfo for the symbol's LOT_SIZE step + MIN_NOTIONAL.",
+            "  SELL the LARGEST quantity that is <= the free balance AND a whole multiple of",
+            "  the LOT_SIZE step — i.e. round the free balance DOWN to the step. This may be",
+            "  slightly more than the requested quantity; that is fine, just never exceed the",
+            "  free balance. Never buy. If even that is below MIN_NOTIONAL, sell nothing and",
+            "  say the position is dust.",
         ]
     else:
         lines.append("- If the order cannot be placed as specified, place nothing and explain why.")
