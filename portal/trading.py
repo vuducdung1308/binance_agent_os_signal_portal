@@ -35,6 +35,10 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 MCP_BETA = "mcp-client-2025-11-20"
 MAX_PAUSE_CONTINUES = 3
 DRY_RUN_FEE_PER_SIDE = 0.001  # taker fee per side, for dry-run P/L estimates
+# A market BUY credits `executedQty` minus the taker fee (often paid in the bought
+# asset), so the free balance is slightly below what we recorded. Shave the CLOSE
+# quantity so the SELL never exceeds the free balance; the dust left behind is tiny.
+CLOSE_QTY_HAIRCUT = 0.0015
 
 # MCP tools the execution agent may call. Everything else on the Binance MCP server
 # (withdraw, transfer, futures, margin, unrelated cancels…) is denied by default.
@@ -231,8 +235,8 @@ def _mcp_toolset() -> dict:
     }
 
 
-def _system_prompt(symbol: str, limits: Limits) -> str:
-    return "\n".join([
+def _system_prompt(symbol: str, limits: Limits, intent: str = "OPEN") -> str:
+    lines = [
         "You are the execution component of an automated spot-trading system.",
         "A separate signal engine has already decided WHAT to do; your only job is to",
         "place that exact order on Binance using the provided MCP tools, then report.",
@@ -243,11 +247,23 @@ def _system_prompt(symbol: str, limits: Limits) -> str:
         "- Place exactly ONE order: the one described in the user message. Do not add,",
         "  split, hedge, or 'improve' it. Do not place protective/OCO orders.",
         "- Never withdraw, transfer, or move funds. Never cancel orders you did not just place.",
-        "- If the order cannot be placed as specified, place nothing and explain why.",
+    ]
+    if intent == "CLOSE":
+        lines += [
+            "- This is a CLOSE (SELL to flatten). Call spot_getAccount first. If the free",
+            "  balance of the base asset is BELOW the requested quantity (fees/dust), place",
+            "  the SELL for the full free balance instead, rounded DOWN to the symbol's",
+            "  LOT_SIZE step. Never sell more than the free balance. Never buy.",
+            "  If the remainder is below MIN_NOTIONAL, sell what is sellable and say so.",
+        ]
+    else:
+        lines.append("- If the order cannot be placed as specified, place nothing and explain why.")
+    lines += [
         "",
         "You may call spot_getAccount / spot_tickerPrice first to sanity-check balance and",
         "price. After ordering, report the order id and fills plainly.",
-    ])
+    ]
+    return "\n".join(lines)
 
 
 def _user_message(order: ProposedOrder) -> str:
@@ -260,7 +276,9 @@ def _user_message(order: ProposedOrder) -> str:
     if order.quote_order_qty is not None:
         lines.append(f"  quoteOrderQty: {order.quote_order_qty:g}  (USDT to spend)")
     if order.quantity is not None:
-        lines.append(f"  quantity: {order.quantity:g}  (base asset to sell)")
+        label = "base asset to sell — sell the free balance if it is lower" \
+            if order.intent == "CLOSE" else "base asset to sell"
+        lines.append(f"  quantity: {order.quantity:g}  ({label})")
     lines.append(f"  reference price: {order.reference_price:g}")
     lines.append("")
     lines.append("Do not place any stop-loss or take-profit order; exits are managed separately.")
@@ -324,7 +342,7 @@ def live_execute(cfg: TradingConfig, order: ProposedOrder) -> Dict[str, Any]:
     base = {
         "model": cfg.anthropic_model,
         "max_tokens": 1024,
-        "system": _system_prompt(order.symbol, cfg.limits),
+        "system": _system_prompt(order.symbol, cfg.limits, order.intent),
         "mcp_servers": [{
             "type": "url",
             "url": cfg.mcp_url,
@@ -411,7 +429,7 @@ def cli_execute(cfg: "TradingConfig", order: ProposedOrder) -> Dict[str, Any]:
         cfg.claude_bin, "-p", _user_message(order),
         "--output-format", "stream-json", "--verbose",
         "--allowedTools", tools,
-        "--append-system-prompt", _system_prompt(order.symbol, cfg.limits),
+        "--append-system-prompt", _system_prompt(order.symbol, cfg.limits, order.intent),
         "--permission-mode", "default",
     ]
     try:
@@ -533,10 +551,12 @@ class TradingService:
         pos = self.store.get_live_position(symbol)
         if pos is None:
             return None, f"no open position for {symbol}"
+        # shave a hair so the SELL stays within the fee-reduced free balance
+        sell_qty = float(f"{pos['base_qty'] * (1 - CLOSE_QTY_HAIRCUT):.8f}")
         return ProposedOrder(
             intent="CLOSE", symbol=symbol, side="SELL", type="MARKET",
-            reference_price=price, notional_usdt=pos["base_qty"] * price,
-            quantity=pos["base_qty"],
+            reference_price=price, notional_usdt=sell_qty * price,
+            quantity=sell_qty,
         ), None
 
     def place(self, symbol: str, intent: str, notional_usdt: Optional[float] = None,
