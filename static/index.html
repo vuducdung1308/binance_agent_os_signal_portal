@@ -21,6 +21,8 @@
     <button id="btnCfg">⚙ Alert thresholds</button>
   </header>
 
+  <div id="autoBar" class="auto-bar"></div>
+
   <div class="layout">
     <main>
       <div class="addbar">
@@ -117,10 +119,16 @@
       <h2>Trading <span id="tradeModeTag" class="mode-tag">–</span></h2>
       <p class="hint">
         Spot market orders placed via the Binance Agent OS MCP (an LLM agent with a
-        default-deny toolset). Every order is confirmed here first — there is no
-        auto-execution. In <b>dry-run</b> nothing hits the network.
+        default-deny toolset). Orders are confirmed here first, unless you arm
+        auto-execute below (which still gives each order a cancellable countdown).
+        In <b>dry-run</b> nothing hits the network.
       </p>
       <div id="tradeStatus"></div>
+
+      <h2 class="sub">Auto-execute on signals
+        <span class="meta">(opt-in — a countdown you can cancel)</span>
+      </h2>
+      <div id="tradeAuto"></div>
 
       <h2 class="sub">Open positions</h2>
       <div id="tradePositions"></div>

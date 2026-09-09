@@ -1,8 +1,9 @@
 # Live trading via the Binance Agent OS MCP
 
 The portal can place **spot MARKET orders** and track P/L. It is off by default
-(`TRADE_MODE=dry-run`) and there is **no auto-execution** — every order is a person
-clicking a button and confirming it in a dialog.
+(`TRADE_MODE=dry-run`). By default every order is a person clicking a button and
+confirming it in a dialog; an opt-in [auto-execute mode](#auto-execute-on-signals)
+lets the portal place the order itself after a countdown you can cancel.
 
 ## How it works
 
@@ -75,11 +76,33 @@ Every closed round-trip is stored (`live_trade`), and every agent call is logged
 (`agent_call`, shown in the panel's audit table). Realised P/L rolls up per UTC day and
 trips the kill switch at the daily-loss limit.
 
+## Auto-execute on signals
+
+Off by default. Two gates: `TRADE_AUTO_ON_SIGNAL=1` in `.env` (a restart), **and** the
+**Armed** toggle in the Trading panel. Only then does a signal schedule an order:
+
+| Signal | Scheduled order |
+|---|---|
+| entry, direction **LONG** | market **BUY** `TRADE_NOTIONAL_USDT` (skipped if already holding it or at the position cap) |
+| **exit** (SL/TP/technical reversal) for a symbol you hold | market **CLOSE** of that position |
+
+Between the signal and the order there is a **countdown** (`TRADE_AUTO_DELAY_SEC`, default
+30s). It shows in a bar at the top of the page and in the Trading panel, each with a
+**Cancel** button, and it pings the browser notification + sound. If you don't cancel, the
+order is placed when the timer hits zero — and still has to pass every guardrail above.
+Disarming, the kill switch, or closing/opening the position in the meantime all abort it.
+Pending countdowns live in memory only — a portal restart drops them (nothing fires).
+
+In `live` mode auto also needs `TRADE_AUTO_ALLOW_LIVE=1` — otherwise a signal in live mode
+schedules nothing and you place the order by hand. Auto orders are tagged `source=auto` in
+the `agent_call` audit log and get a Telegram line when they fire.
+
 ## What the portal never does
 
 - Run the OAuth flow for you, or store your Binance password.
-- Auto-execute — an order is always a confirmed click.
-- Place stop-loss / take-profit / OCO orders — exits are manual `CLOSE`s.
+- Auto-execute silently — auto mode is opt-in, armed by hand, and every order has a
+  cancellable countdown; with auto off, an order is always a confirmed click.
+- Place stop-loss / take-profit / OCO orders — exits are manual or auto `CLOSE`s.
 - Touch anything outside the allow-listed spot tools.
 
 Not financial advice. Small-sample, fee-aware only in estimates. DYOR.

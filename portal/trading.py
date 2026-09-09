@@ -94,6 +94,11 @@ class TradingConfig:
     oauth_token: str
     anthropic_api_key: str
     anthropic_model: str
+    # Auto-execute on signals (opt-in). auto_execute is the master env switch; the
+    # live arm/disarm toggle lives in trading_state.auto_armed (UI-controlled).
+    auto_execute: bool = False
+    auto_allow_live: bool = False
+    auto_delay_sec: int = 30
 
     @property
     def live_ready(self) -> bool:
@@ -124,6 +129,9 @@ def load_trading_config() -> TradingConfig:
         oauth_token=os.environ.get("BINANCE_AGENT_OAUTH_TOKEN", "").strip(),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", "").strip(),
         anthropic_model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5").strip() or "claude-sonnet-5",
+        auto_execute=_bool("TRADE_AUTO_ON_SIGNAL", False),
+        auto_allow_live=_bool("TRADE_AUTO_ALLOW_LIVE", False),
+        auto_delay_sec=max(3, int(_num("TRADE_AUTO_DELAY_SEC", 30.0, 600.0))),
     )
 
 
@@ -373,7 +381,29 @@ class TradingService:
             "positions": positions,
             "trades": self.store.recent_trades(30),
             "audit": self.store.recent_agent_calls(20),
+            "auto": self._auto_state_dict(),
         }
+
+    def _auto_state_dict(self) -> Dict[str, Any]:
+        st = self.store.trading_state()
+        armed = bool(st.get("auto_armed"))
+        blocked_live = self.cfg.mode == "live" and not self.cfg.auto_allow_live
+        killed = st["killed"] or self.cfg.env_kill_switch
+        return {
+            "available": self.cfg.auto_execute,
+            "armed": armed,
+            "allow_live": self.cfg.auto_allow_live,
+            "blocked_live": blocked_live,
+            "delay_sec": self.cfg.auto_delay_sec,
+            "effective": bool(self.cfg.auto_execute and armed and not killed and not blocked_live),
+        }
+
+    def auto_effective(self) -> bool:
+        return self._auto_state_dict()["effective"]
+
+    def set_auto_armed(self, on: bool) -> Dict[str, Any]:
+        self.store.set_auto_armed(on)
+        return self.status()
 
     # ---------- place / close ----------
     def _propose(self, symbol: str, intent: str, notional_usdt: Optional[float]) -> Tuple[Optional[ProposedOrder], Optional[str]]:
@@ -396,7 +426,8 @@ class TradingService:
             quantity=pos["base_qty"],
         ), None
 
-    def place(self, symbol: str, intent: str, notional_usdt: Optional[float] = None) -> Dict[str, Any]:
+    def place(self, symbol: str, intent: str, notional_usdt: Optional[float] = None,
+              source: str = "manual") -> Dict[str, Any]:
         intent = intent.upper()
         if intent not in ("OPEN", "CLOSE"):
             return {"status": "error", "error": "intent must be OPEN or CLOSE"}
@@ -417,7 +448,7 @@ class TradingService:
         if not gr["ok"]:
             self.store.insert_agent_call(
                 intent=intent, symbol=order.symbol, mode=self.cfg.mode, status="blocked",
-                guardrail=json.dumps(gr))
+                guardrail=json.dumps(gr), source=source)
             return {"status": "blocked", "reasons": gr["reasons"], "order": _order_public(order)}
 
         if self.cfg.mode == "live":
@@ -434,7 +465,7 @@ class TradingService:
             stop_reason=result.get("stop_reason"),
             tool_calls=json.dumps(result.get("tool_calls")) if result.get("tool_calls") else None,
             text=result.get("text"), error=result.get("error"),
-            guardrail=json.dumps(gr),
+            guardrail=json.dumps(gr), source=source,
         )
         return {**result, "order": _order_public(order)}
 

@@ -31,7 +31,6 @@ log = logging.getLogger("portal.app")
 settings = load_portal_settings()
 store = Store(settings.db_path)
 hub = Hub()
-poller = Poller(settings, store, hub)
 
 
 def _mark_price(symbol: str):
@@ -40,6 +39,7 @@ def _mark_price(symbol: str):
 
 
 trading = TradingService(load_trading_config(), store, _mark_price)
+poller = Poller(settings, store, hub, trading)
 
 
 @asynccontextmanager
@@ -77,6 +77,11 @@ async def lifespan(_app: FastAPI):
         tc.limits.daily_loss_limit_usdt, tc.limits.max_open_positions,
         "  [KILL_SWITCH env ON]" if tc.env_kill_switch else "",
     )
+    if tc.auto_execute:
+        log.info(
+            "Auto-execute on signals: ENABLED (delay %ss, live %s) — arm it in the Trading panel",
+            tc.auto_delay_sec, "allowed" if tc.auto_allow_live else "blocked (set TRADE_AUTO_ALLOW_LIVE=1)",
+        )
     try:
         yield
     finally:
@@ -117,6 +122,14 @@ class OrderRequest(BaseModel):
 
 class KillSwitchRequest(BaseModel):
     on: bool
+
+
+class AutoArmRequest(BaseModel):
+    on: bool
+
+
+class AutoCancelRequest(BaseModel):
+    symbol: Optional[str] = None
 
 
 # ----------------------------- REST -----------------------------
@@ -258,7 +271,9 @@ async def get_bot_health() -> dict:
 
 @app.get("/api/trading/status")
 async def trading_status() -> dict:
-    return await asyncio.to_thread(trading.status)
+    st = await asyncio.to_thread(trading.status)
+    st["auto_pending"] = poller.auto_pending_list()
+    return st
 
 
 @app.post("/api/trading/order")
@@ -277,7 +292,26 @@ async def trading_order(body: OrderRequest) -> dict:
 
 @app.put("/api/trading/kill-switch")
 async def trading_kill_switch(body: KillSwitchRequest) -> dict:
-    return await asyncio.to_thread(trading.set_kill_switch, body.on)
+    res = await asyncio.to_thread(trading.set_kill_switch, body.on)
+    if body.on:  # kill switch on -> drop any queued auto orders
+        await poller.cancel_auto()
+    res["auto_pending"] = poller.auto_pending_list()
+    return res
+
+
+@app.put("/api/trading/auto")
+async def trading_auto_arm(body: AutoArmRequest) -> dict:
+    res = await asyncio.to_thread(trading.set_auto_armed, body.on)
+    if not body.on:
+        await poller.cancel_auto()
+    res["auto_pending"] = poller.auto_pending_list()
+    return res
+
+
+@app.post("/api/trading/auto-cancel")
+async def trading_auto_cancel(body: AutoCancelRequest) -> dict:
+    n = await poller.cancel_auto(body.symbol)
+    return {"cancelled": n, "auto_pending": poller.auto_pending_list()}
 
 
 @app.post("/api/telegram-test")

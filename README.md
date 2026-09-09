@@ -101,7 +101,7 @@ Settings live in `.env` (`cp .env.example .env`); every one has a working defaul
 | **Signal history** | Every entry/exit kept in SQLite indefinitely. Backfilled from the bot's `output/signals/*.txt` on first run, then kept in sync every scan. |
 | **Bot health** | Header strip showing each bot scheduler's state, from `launchctl` (falls back to log‑file mtime). |
 | **Notifications** | Optional desktop notification + sound on a new signal, and optional Telegram push (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`) for every signal the portal detects. |
-| **Live trading** (opt-in) | Place spot MARKET orders through the **Binance Agent OS MCP** (Claude drives an OAuth-scoped, spot-only toolset). `dry-run` by default — simulated, no network. Manual + confirm only, no auto-execution. Guardrails (per-order cap, orders/day, daily-loss kill switch, one position). Tracks open positions with live unrealised P/L, closed-trade realised P/L, and an agent audit log. See [docs/trading.md](docs/trading.md). |
+| **Live trading** (opt-in) | Place spot MARKET orders through the **Binance Agent OS MCP** (Claude drives an OAuth-scoped, spot-only toolset). `dry-run` by default — simulated, no network. Confirmed clicks, or opt-in **auto-execute on signals** (`TRADE_AUTO_ON_SIGNAL=1` + an *Armed* toggle) with a cancellable countdown. Guardrails (per-order cap, orders/day, daily-loss kill switch, one position). Tracks open positions with live unrealised P/L, closed-trade realised P/L, and an agent audit log. See [docs/trading.md](docs/trading.md). |
 
 ---
 
@@ -378,8 +378,11 @@ All optional. Set via `.env` in the project root or as environment variables (en
 | `PORTAL_TELEGRAM_INCLUDE_BOT` | `false` | Also push signals ingested from the bot's `output/signals/*.txt`. Leave off when `BOT_ROOT` is a real bot that already sends its own. |
 | `TRADE_MODE` | `dry-run` | `live` enables real spot orders via the MCP. |
 | `KILL_SWITCH` | `0` | Any truthy value blocks new OPENs (CLOSE stays allowed). |
-| `TRADE_NOTIONAL_USDT` | `10` | USDT per manual OPEN. |
+| `TRADE_NOTIONAL_USDT` | `10` | USDT per OPEN (manual or auto). |
 | `TRADE_MAX_NOTIONAL_USDT` / `TRADE_MAX_ORDERS_PER_DAY` / `TRADE_DAILY_LOSS_LIMIT_USDT` / `TRADE_MAX_OPEN_POSITIONS` | `10 / 5 / 10 / 1` | Guardrails. Env can tighten or modestly raise, up to a hard ceiling (`100 / 50 / 1000 / 3`). |
+| `TRADE_AUTO_ON_SIGNAL` | `0` | Master switch for auto-execute on signals. Still needs the *Armed* toggle in the Trading panel. |
+| `TRADE_AUTO_DELAY_SEC` | `30` | Cancellable countdown before an armed auto order fires (3–600). |
+| `TRADE_AUTO_ALLOW_LIVE` | `0` | Second gate: auto only fires in `live` mode when this is also `1`. |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | *(none)* / `claude-sonnet-5` | Execution agent (live mode only). |
 | `BINANCE_AGENT_MCP_URL` / `BINANCE_AGENT_OAUTH_TOKEN` | `…/mcp/agentic` / *(none)* | The MCP connector + a sub-account OAuth token (live mode only — see [docs/trading.md](docs/trading.md)). |
 | `PYTHON` | `python3` | Interpreter `run.sh` uses to create `.venv`. |
@@ -415,6 +418,8 @@ Base URL `http://127.0.0.1:8777`.
 | `GET` | `/api/trading/status` | Mode, guardrails, kill switch, open positions + live P/L, closed trades, agent audit. |
 | `POST` | `/api/trading/order` | `{ "symbol", "intent": "OPEN"\|"CLOSE", "notional_usdt"?, "confirm": true }` — `confirm` required. |
 | `PUT` | `/api/trading/kill-switch` | `{ "on": bool }` — the manual kill switch. |
+| `PUT` | `/api/trading/auto` | `{ "on": bool }` — arm / disarm auto-execute on signals. |
+| `POST` | `/api/trading/auto-cancel` | `{ "symbol"? }` — cancel one (or all) pending auto orders. |
 | `WS` | `/ws` | `prime`, then `price_batch` / `indicators` / `signal`. |
 | `GET` | `/` , `/static/*` | Frontend. |
 
@@ -433,7 +438,7 @@ rebuilt on the next launch.
 | `signal_event` | entry/exit history. `source` ∈ `portal` (portal‑detected), `bot` (ingested from the bot's `.txt`), `backfill` (first‑run import) |
 | `indicator_snapshot` | indicator time series for sparklines/history; auto‑pruned |
 | `portal_position` | the portal's own paper positions (one per symbol) |
-| `trading_state` | day‑scoped order/P‑L counters + the manual kill switch |
+| `trading_state` | day‑scoped order/P‑L counters + the manual kill switch + auto‑execute armed flag |
 | `live_position` | open spot positions the portal placed (dry‑run or live) |
 | `live_trade` | closed round‑trips with realised P/L |
 | `agent_call` | every execution‑agent call, for audit |
@@ -542,10 +547,12 @@ Open a coin → "Engine conditions" shows exactly which gates are unmet.
 
 - **Local, single user, no auth.** Bind stays on `127.0.0.1`. Do not expose it — with
   live trading configured, the process holds an OAuth token that can place spot orders.
-- **Trading is opt-in and manual.** Default `dry-run` places no orders. Even in `live`
-  mode there is no auto-execution: every order is a confirmed click, capped by
-  guardrails, on a Binance **sub-account** you authorize yourself. No withdrawals, no
-  transfers, no SL/TP orders. **Not financial advice.**
+- **Trading is opt-in.** Default `dry-run` places no orders. Orders are confirmed clicks
+  unless you opt into auto-execute (`TRADE_AUTO_ON_SIGNAL=1` + an *Armed* toggle), which
+  still gives every order a cancellable countdown, still enforces every guardrail, and in
+  `live` mode needs a second flag (`TRADE_AUTO_ALLOW_LIVE=1`). All on a Binance
+  **sub-account** you authorize yourself. No withdrawals, no transfers, no SL/TP orders.
+  **Not financial advice.**
 - **Portal paper positions are close‑candle only.** Unlike the bot's dedicated fast
   watcher, the portal checks its *own* paper exits on the 30 s closed‑candle pass, so an
   intrabar SL/TP touch can lag by up to one candle. Real trades are covered by the bot.

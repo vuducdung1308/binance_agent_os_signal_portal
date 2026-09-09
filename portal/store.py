@@ -102,7 +102,8 @@ CREATE TABLE IF NOT EXISTS trading_state (
     killed                  INTEGER NOT NULL DEFAULT 0,
     daily_loss_tripped      INTEGER NOT NULL DEFAULT 0,
     orders_today            INTEGER NOT NULL DEFAULT 0,
-    realized_pnl_today_usdt REAL NOT NULL DEFAULT 0
+    realized_pnl_today_usdt REAL NOT NULL DEFAULT 0,
+    auto_armed              INTEGER NOT NULL DEFAULT 0   -- auto-execute on signals armed?
 );
 
 -- One open spot position per symbol (mirrors what the portal itself opened).
@@ -149,7 +150,8 @@ CREATE TABLE IF NOT EXISTS agent_call (
     tool_calls  TEXT,                      -- JSON
     text        TEXT,
     error       TEXT,
-    guardrail   TEXT                       -- JSON {ok, reasons[]}
+    guardrail   TEXT,                      -- JSON {ok, reasons[]}
+    source      TEXT                       -- 'manual' | 'auto'
 );
 CREATE INDEX IF NOT EXISTS idx_agent_call_ts ON agent_call(ts DESC);
 """
@@ -166,6 +168,19 @@ class Store:
         self.db.row_factory = sqlite3.Row
         with _LOCK:
             self.db.executescript(_SCHEMA)
+            self.db.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Additive column migrations for DBs created before a feature landed."""
+        with _LOCK:
+            ts_cols = {r["name"] for r in self.db.execute("PRAGMA table_info(trading_state)")}
+            if "auto_armed" not in ts_cols:
+                self.db.execute(
+                    "ALTER TABLE trading_state ADD COLUMN auto_armed INTEGER NOT NULL DEFAULT 0")
+            ac_cols = {r["name"] for r in self.db.execute("PRAGMA table_info(agent_call)")}
+            if "source" not in ac_cols:
+                self.db.execute("ALTER TABLE agent_call ADD COLUMN source TEXT")
             self.db.commit()
 
     # ---------- watchlist ----------
@@ -492,12 +507,19 @@ class Store:
                 d.update(day=today, daily_loss_tripped=0, orders_today=0, realized_pnl_today_usdt=0.0)
         d["killed"] = bool(d["killed"])
         d["daily_loss_tripped"] = bool(d["daily_loss_tripped"])
+        d["auto_armed"] = bool(d.get("auto_armed"))
         return d
 
     def set_kill_switch(self, on: bool) -> None:
         self.trading_state()  # ensure row + rollover
         with _LOCK:
             self.db.execute("UPDATE trading_state SET killed = ? WHERE id = 1", (1 if on else 0,))
+            self.db.commit()
+
+    def set_auto_armed(self, on: bool) -> None:
+        self.trading_state()  # ensure row + rollover
+        with _LOCK:
+            self.db.execute("UPDATE trading_state SET auto_armed = ? WHERE id = 1", (1 if on else 0,))
             self.db.commit()
 
     def record_order_counter(self, realized_pnl_delta: float, daily_loss_limit: float) -> None:
@@ -567,7 +589,7 @@ class Store:
 
     def insert_agent_call(self, **kw) -> int:
         cols = ["ts", "intent", "symbol", "mode", "status", "model", "stop_reason",
-                "tool_calls", "text", "error", "guardrail"]
+                "tool_calls", "text", "error", "guardrail", "source"]
         kw.setdefault("ts", _now())
         with _LOCK:
             cur = self.db.execute(

@@ -20,7 +20,7 @@ import collections
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Deque, Dict, List, Optional, Set
 
 from . import bot_bridge as bb
@@ -104,6 +104,10 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _iso_in(seconds: float) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
 def evaluate_alerts(snap: Dict[str, Any], cfg: Dict[str, float]) -> List[dict]:
     """Portal-only display alerts derived from the thresholds table. Does NOT affect
     the bot's signal engine — purely badges/colours for the dashboard."""
@@ -140,12 +144,14 @@ def evaluate_alerts(snap: Dict[str, Any], cfg: Dict[str, float]) -> List[dict]:
 
 
 class Poller:
-    def __init__(self, settings: PortalSettings, store: Store, hub: Hub) -> None:
+    def __init__(self, settings: PortalSettings, store: Store, hub: Hub, trading=None) -> None:
         self.s = settings
         self.store = store
         self.hub = hub
+        self.trading = trading  # TradingService | None — enables auto-execute on signals
         self._tasks: List[asyncio.Task] = []
         self._last_snapshot_at: Dict[str, float] = {}
+        self._auto_pending: Dict[str, dict] = {}  # symbol -> scheduled auto order
         self.telegram = Telegram(settings.telegram_bot_token, settings.telegram_chat_id)
         # First signal-loop pass only seeds state — don't Telegram the backlog. Armed
         # once the first full pass finishes; genuinely new signals after that notify.
@@ -156,6 +162,8 @@ class Poller:
             asyncio.create_task(self._price_loop(), name="portal-price-loop"),
             asyncio.create_task(self._signal_loop(), name="portal-signal-loop"),
         ]
+        if self.trading is not None:
+            self._tasks.append(asyncio.create_task(self._auto_loop(), name="portal-auto-loop"))
 
     async def stop(self) -> None:
         for t in self._tasks:
@@ -214,8 +222,10 @@ class Poller:
             await asyncio.sleep(self.s.signal_poll_sec)
 
     async def _emit_signal(self, ev: dict) -> None:
-        """Broadcast a new signal to the browsers and, when configured, to Telegram."""
+        """Broadcast a new signal to the browsers, optionally to Telegram, and — if
+        auto-execute is armed — schedule a trade with a cancel window."""
         await self.hub.broadcast({"type": "signal", "event": ev, "ts": _now()})
+        await self._maybe_schedule_auto(ev)
         if not (self._notify_armed and self.telegram.enabled):
             return
         if ev.get("source") == "bot" and not self.s.telegram_include_bot_signals:
@@ -224,6 +234,129 @@ class Poller:
             await asyncio.to_thread(self.telegram.send, format_signal(ev))
         except Exception:
             log.exception("telegram notify failed")
+
+    # ---------- auto-execute on signal (opt-in, with a cancel window) ----------
+    async def _maybe_schedule_auto(self, ev: dict) -> None:
+        """A new entry-LONG schedules an OPEN; an exit for a symbol we hold schedules
+        a CLOSE. Each is broadcast as `auto_pending` and only fires after the delay if
+        it hasn't been cancelled and the switch is still effective."""
+        if self.trading is None or not self._notify_armed:
+            return
+        try:
+            if not self.trading._auto_state_dict()["effective"]:
+                return
+        except Exception:
+            return
+
+        sym = (ev.get("symbol") or "").upper()
+        kind = ev.get("kind")
+        direction = (ev.get("direction") or "").upper()
+        if not sym or sym in self._auto_pending:
+            return
+
+        have_pos = self.store.get_live_position(sym) is not None
+        if kind == "entry" and direction == "LONG":
+            if have_pos:
+                return
+            cap = self.trading.cfg.limits.max_open_positions
+            if len(self.store.live_positions()) >= cap:
+                return  # would only be blocked by guardrails at fire time
+            intent, notional = "OPEN", self.trading.cfg.notional_usdt
+        elif kind == "exit":
+            if not have_pos:
+                return
+            intent, notional = "CLOSE", None
+        else:
+            return
+
+        delay = self.trading.cfg.auto_delay_sec
+        self._auto_pending[sym] = {
+            "symbol": sym, "intent": intent, "notional": notional, "kind": kind,
+            "setup": ev.get("setup"), "fire_at": asyncio.get_event_loop().time() + delay,
+        }
+        log.info("auto-%s %s scheduled in %ss (%s/%s)", intent, sym, delay, kind, ev.get("setup"))
+        await self.hub.broadcast({
+            "type": "auto_pending", "ts": _now(), "symbol": sym, "intent": intent,
+            "seconds": delay, "deadline": _iso_in(delay), "kind": kind,
+            "setup": ev.get("setup"), "direction": direction or None,
+        })
+
+    async def _auto_loop(self) -> None:
+        await asyncio.sleep(2)
+        while True:
+            try:
+                now = asyncio.get_event_loop().time()
+                due = [s for s, p in self._auto_pending.items() if p["fire_at"] <= now]
+                for sym in due:
+                    pend = self._auto_pending.pop(sym, None)
+                    if pend:
+                        await self._fire_auto(pend)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("auto loop error")
+            await asyncio.sleep(1)
+
+    async def _fire_auto(self, pend: dict) -> None:
+        sym, intent, notional = pend["symbol"], pend["intent"], pend["notional"]
+        # Re-check at fire time — the user may have disarmed / hit the kill switch,
+        # or the position state may have changed while the countdown ran.
+        if intent == "OPEN":
+            if not self.trading._auto_state_dict()["effective"]:
+                await self.hub.broadcast({"type": "auto_cancelled", "symbol": sym,
+                                          "reason": "auto disarmed", "ts": _now()})
+                return
+            if self.store.get_live_position(sym) is not None:
+                return
+        elif self.store.get_live_position(sym) is None:
+            return  # nothing left to close
+
+        try:
+            result = await asyncio.to_thread(self.trading.place, sym, intent, notional, "auto")
+        except Exception as exc:
+            log.exception("auto %s failed for %s", intent, sym)
+            result = {"status": "error", "error": str(exc)}
+
+        log.info("auto-%s %s -> %s", intent, sym, result.get("status"))
+        await self.hub.broadcast({
+            "type": "auto_fired", "ts": _now(), "symbol": sym, "intent": intent,
+            "status": result.get("status"), "note": result.get("note"),
+            "reasons": result.get("reasons"), "error": result.get("error"),
+            "realized_pnl": result.get("realized_pnl"),
+        })
+        if self._notify_armed and self.telegram.enabled:
+            bits = [f"\U0001f916 AUTO {intent} {sym} -> {result.get('status')}"]
+            if result.get("note"):
+                bits.append(str(result["note"]))
+            if result.get("reasons"):
+                bits.append("blocked: " + "; ".join(result["reasons"]))
+            if result.get("error"):
+                bits.append("error: " + str(result["error"]))
+            if result.get("realized_pnl") is not None:
+                bits.append(f"P/L {result['realized_pnl']:+.2f} USDT")
+            try:
+                await asyncio.to_thread(self.telegram.send, "\n".join(bits))
+            except Exception:
+                pass
+
+    async def cancel_auto(self, symbol: Optional[str] = None) -> int:
+        if symbol is None:
+            syms = list(self._auto_pending)
+            self._auto_pending.clear()
+        else:
+            syms = [symbol.upper()] if self._auto_pending.pop(symbol.upper(), None) else []
+        for s in syms:
+            await self.hub.broadcast({"type": "auto_cancelled", "symbol": s,
+                                      "reason": "cancelled", "ts": _now()})
+        return len(syms)
+
+    def auto_pending_list(self) -> List[dict]:
+        now = asyncio.get_event_loop().time()
+        return [
+            {"symbol": s, "intent": p["intent"], "kind": p["kind"], "setup": p.get("setup"),
+             "seconds_left": max(0, round(p["fire_at"] - now))}
+            for s, p in self._auto_pending.items()
+        ]
 
     async def _ingest_bot_signals(self) -> None:
         """Pick up entries/exits the bot itself wrote to output/signals/*.txt after the

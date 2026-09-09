@@ -199,7 +199,11 @@ flowchart LR
 - **Trần số lệnh/ngày** (mặc định 5).
 - **Trần lỗ thực hiện trong ngày** ($10) — chạm là tự bật kill switch.
 - Lệnh **CLOSE luôn được phép**, kể cả khi kill switch bật.
-- **Thủ công + xác nhận**: mọi lệnh hiện hộp xác nhận trước, **không có auto-execute**.
+- **Thủ công + xác nhận** mặc định: mọi lệnh hiện hộp xác nhận trước.
+- **Auto-execute (tùy chọn)**: bật `TRADE_AUTO_ON_SIGNAL=1` + gạt công tắc *Armed* thì tín
+  hiệu tự lên lịch lệnh — entry-LONG → BUY, exit → CLOSE — sau một đồng hồ đếm ngược (mặc
+  định 30s) bạn có thể hủy ở thanh trên cùng hoặc trong panel. Mọi lệnh auto vẫn qua
+  guardrail; chế độ live cần thêm cờ `TRADE_AUTO_ALLOW_LIVE=1`.
 - **`dry-run` là mặc định**: không có gì chạm mạng, mô phỏng khớp lệnh kèm mô hình phí.
 
 ![Mọi lệnh đều phải xác nhận trước — không có gì tự chạy](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/order-confirm.png)
@@ -228,8 +232,9 @@ agent](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_p
   standalone; trỏ `BOT_ROOT` sang checkout thật để đọc thêm vị thế paper live + file tín hiệu
   của nó.
 - **Auto-start trên macOS** qua LaunchAgent (`RunAtLoad`, `KeepAlive` khi crash).
-- **Không làm:** không sửa toán chỉ báo của bot; không futures/margin; không auto-trade; mặc
-  định dry-run; local-only, không auth (đừng expose ra ngoài mạng LAN).
+- **Không làm:** không sửa toán chỉ báo của bot; không futures/margin; auto-trade là tùy
+  chọn, phải tự arm và luôn hủy được; mặc định dry-run; local-only, không auth (đừng expose
+  ra ngoài mạng LAN).
 
 ---
 

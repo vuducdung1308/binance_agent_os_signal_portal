@@ -201,7 +201,11 @@ flowchart LR
 - **Orders-per-day cap** (default 5).
 - **Daily realised-loss limit** ($10) — hitting it trips the kill switch.
 - **CLOSE is always allowed**, even with the kill switch on.
-- **Manual + confirm**: every order shows a confirm dialog first, **no auto-execution**.
+- **Manual + confirm** by default: every order shows a confirm dialog first.
+- **Opt-in auto-execute**: `TRADE_AUTO_ON_SIGNAL=1` + an *Armed* toggle lets a signal
+  schedule the order itself — an entry-LONG → BUY, an exit → CLOSE — after a countdown
+  (default 30s) you can cancel from a top bar or the panel. Every auto order still passes
+  the guardrails; live mode needs a second flag (`TRADE_AUTO_ALLOW_LIVE=1`).
 - **`dry-run` is the default**: nothing hits the network, a simulated fill with a fee model.
 
 ![Every order is confirmed first — nothing is auto-executed](https://raw.githubusercontent.com/vuducdung1308/binance_agent_os_signal_portal/main/docs/img/order-confirm.png)
@@ -230,8 +234,9 @@ the agent audit log](https://raw.githubusercontent.com/vuducdung1308/binance_age
   runs standalone; point `BOT_ROOT` at a real checkout to also read its live paper positions +
   signal files.
 - **Auto-start on macOS** via a LaunchAgent (`RunAtLoad`, `KeepAlive` on crash).
-- **Non-goals:** does not change the bot's indicator math; no futures/margin; no auto-trading;
-  dry-run by default; local-only, no auth (don't expose it beyond your LAN).
+- **Non-goals:** does not change the bot's indicator math; no futures/margin; auto-trading
+  is opt-in, armed by hand, and always cancellable; dry-run by default; local-only, no auth
+  (don't expose it beyond your LAN).
 
 ---
 

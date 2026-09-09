@@ -15,6 +15,8 @@ const state = {
   cfgDefaults: {},
   engineDefaults: {},
   engineParams: null, // { meta, defaults, saved } from /api/engine-params
+  trading: null,      // last /api/trading/status
+  autoPending: new Map(), // symbol -> { symbol, intent, kind, setup, deadlineMs }
 };
 
 const view = {
@@ -128,6 +130,33 @@ function handleMsg(m) {
   } else if (m.type === "signal") {
     prependFeed(m.event, true);
     fireAlert(m.event);
+  } else if (m.type === "auto_pending") {
+    state.autoPending.set(m.symbol, {
+      symbol: m.symbol, intent: m.intent, kind: m.kind, setup: m.setup,
+      deadlineMs: Date.parse(m.deadline) || Date.now() + (m.seconds || 30) * 1000,
+    });
+    renderAutoBar();
+    beep(m.intent === "CLOSE" ? 320 : 680);
+    if ("Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification(`Auto ${m.intent} ${m.symbol} in ${m.seconds}s`,
+          { body: "Open the portal to cancel", tag: "auto-" + m.symbol });
+      } catch (e) {}
+    }
+    if ($("#tradeBg").classList.contains("show")) refreshTradeBadge();
+  } else if (m.type === "auto_cancelled") {
+    state.autoPending.delete(m.symbol);
+    renderAutoBar();
+    if ($("#tradeBg").classList.contains("show")) refreshTradeBadge();
+  } else if (m.type === "auto_fired") {
+    state.autoPending.delete(m.symbol);
+    renderAutoBar();
+    const detail = m.error ? "error: " + m.error
+      : (m.reasons && m.reasons.length ? "blocked: " + m.reasons.join("; ")
+      : (m.note || m.status));
+    toast(`🤖 Auto ${m.intent} ${m.symbol} — ${detail}` +
+      (m.realized_pnl != null ? ` · P/L ${money(m.realized_pnl)} U` : ""));
+    refreshTradeBadge();
   }
 }
 
@@ -958,6 +987,64 @@ async function saveCfg() {
 let _tradeTimer = null;
 const money = (v, d = 2) => (v == null || isNaN(v) ? "–" : (v >= 0 ? "+" : "") + Number(v).toFixed(d));
 
+// ---- auto-execute countdown bar ----
+let _autoTicker = null;
+
+function renderAutoBar() {
+  const bar = $("#autoBar");
+  if (!bar) return;
+  bar.querySelectorAll("[data-sym]").forEach((n) => n.remove()); // keep transient toasts
+  const live = state.trading && state.trading.mode === "live";
+  for (const it of state.autoPending.values()) {
+    const el = document.createElement("div");
+    el.className = "auto-item" + (live ? " live" : "");
+    el.dataset.sym = it.symbol;
+    const left = Math.max(0, Math.round((it.deadlineMs - Date.now()) / 1000));
+    el.innerHTML =
+      `<span class="grow">⏱ Auto <b>${it.intent}</b> ${it.symbol}` +
+      (it.setup ? ` <span class="meta">(${it.kind}/${it.setup})</span>` : "") +
+      ` — fires in <span class="cd">${left}s</span> · ${live ? "<b>LIVE order</b>" : "dry-run"}</span>` +
+      `<button data-cancel="${it.symbol}">Cancel</button>`;
+    el.querySelector("[data-cancel]").onclick = () => cancelAuto(it.symbol);
+    bar.appendChild(el);
+  }
+  clearInterval(_autoTicker);
+  if (state.autoPending.size) {
+    _autoTicker = setInterval(() => {
+      if (!state.autoPending.size) { clearInterval(_autoTicker); return; }
+      for (const [sym, it] of state.autoPending) {
+        const left = Math.round((it.deadlineMs - Date.now()) / 1000);
+        const node = $(`#autoBar [data-sym="${sym}"] .cd`);
+        if (node) node.textContent = Math.max(0, left) + "s";
+        if (left < -10) state.autoPending.delete(sym); // fire msg lost — clear stale
+      }
+    }, 1000);
+  }
+}
+
+async function cancelAuto(symbol) {
+  try {
+    await fetch("/api/trading/auto-cancel", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol }),
+    });
+  } catch (e) {}
+  state.autoPending.delete(symbol);
+  renderAutoBar();
+  if ($("#tradeBg").classList.contains("show")) refreshTradeBadge();
+}
+
+function toast(text) {
+  const bar = $("#autoBar");
+  if (!bar) return;
+  const t = document.createElement("div");
+  t.className = "auto-item";
+  t.innerHTML = `<span class="grow">${text}</span><button class="ghost">✕</button>`;
+  t.querySelector("button").onclick = () => t.remove();
+  bar.appendChild(t);
+  setTimeout(() => t.remove(), 9000);
+}
+
 async function refreshTradeBadge() {
   try {
     const st = await fetch("/api/trading/status").then((r) => r.json());
@@ -971,9 +1058,25 @@ async function refreshTradeBadge() {
     b.textContent =
       `${st.mode === "live" ? "LIVE" : "DRY"}` +
       (st.kill_switch ? " ⛔" : "") +
+      (st.auto && st.auto.effective ? " 🤖" : "") +
       ` · ${openN} pos` +
       (openN ? ` (${money(uPnl)}U)` : "") +
       ` · day ${money(day)}U`;
+
+    // reconcile the countdown bar with the server's pending list
+    if (Array.isArray(st.auto_pending)) {
+      const seen = new Set();
+      for (const p of st.auto_pending) {
+        seen.add(p.symbol);
+        const ex = state.autoPending.get(p.symbol);
+        state.autoPending.set(p.symbol, {
+          symbol: p.symbol, intent: p.intent, kind: p.kind, setup: p.setup,
+          deadlineMs: ex ? ex.deadlineMs : Date.now() + (p.seconds_left || 0) * 1000,
+        });
+      }
+      for (const s of [...state.autoPending.keys()]) if (!seen.has(s)) state.autoPending.delete(s);
+      renderAutoBar();
+    }
     if ($("#tradeBg").classList.contains("show")) renderTrade(st);
   } catch (e) {
     $("#tradeBadge").hidden = true;
@@ -1028,6 +1131,42 @@ function renderTrade(st) {
     refreshTradeBadge();
   };
 
+  // ---- auto-execute section ----
+  const a = st.auto || {};
+  const pend = st.auto_pending || [];
+  if (!a.available) {
+    $("#tradeAuto").innerHTML =
+      `<p class="hint">Off. Set <code>TRADE_AUTO_ON_SIGNAL=1</code> in <code>.env</code> and restart to enable.
+       When on: a new <b>entry-LONG</b> signal schedules a market BUY and an <b>exit</b> signal schedules a
+       CLOSE of that position — each after a countdown you can cancel here or from the bar at the top of the page.</p>`;
+  } else {
+    $("#tradeAuto").innerHTML = `
+      <div class="row">
+        <label><input type="checkbox" id="autoArm" ${a.armed ? "checked" : ""} ${a.blocked_live ? "disabled" : ""}/>
+          Armed — auto-place on new signals (${a.delay_sec}s cancel window)</label>
+        ${a.blocked_live ? '<span class="meta down">live mode — set TRADE_AUTO_ALLOW_LIVE=1 to permit auto in live</span>' : ""}
+      </div>
+      <p class="hint">Entry <b>LONG</b> → market BUY ${st.notional_usdt} USDT · exit signal → CLOSE that position.
+        Every auto order still passes the guardrails below. Currently:
+        <b class="${a.effective ? "up" : "down"}">${a.effective ? "ACTIVE" : "inactive"}</b>${st.kill_switch ? " · kill switch on" : ""}.</p>
+      ${pend.length
+        ? `<div class="pend">${pend.map((p) => `<div>⏱ <b>${p.intent}</b> ${p.symbol}
+            <span class="meta">${p.kind}${p.setup ? "/" + p.setup : ""}</span> in ${p.seconds_left}s
+            <button class="ghost" data-acancel="${p.symbol}">Cancel</button></div>`).join("")}</div>`
+        : '<p class="hint">No pending auto orders.</p>'}`;
+    const arm = $("#autoArm");
+    if (arm && !a.blocked_live) arm.onchange = async () => {
+      await fetch("/api/trading/auto", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: arm.checked }),
+      });
+      refreshTradeBadge();
+    };
+    $("#tradeAuto").querySelectorAll("[data-acancel]").forEach((b) => {
+      b.onclick = () => cancelAuto(b.dataset.acancel);
+    });
+  }
+
   const pos = st.positions || [];
   $("#tradePositions").innerHTML = pos.length
     ? `<div style="overflow-x:auto"><table class="cfg">
@@ -1076,7 +1215,7 @@ function renderTrade(st) {
           let detail = a.error || a.text || "";
           if (a.guardrail) { try { const g = JSON.parse(a.guardrail); if (!g.ok) detail = g.reasons.join("; "); } catch (e) {} }
           if (a.tool_calls) { try { detail = JSON.parse(a.tool_calls).map((c) => c.name + (c.is_error ? "✗" : "✓")).join(", ") + (detail ? " · " + detail : ""); } catch (e) {} }
-          return `<tr><td class="hint">${timeAgo(a.ts)}</td><td>${a.intent}</td><td>${a.symbol}</td>
+          return `<tr><td class="hint">${timeAgo(a.ts)}</td><td>${a.intent}${a.source === "auto" ? ' <span class="meta">🤖</span>' : ""}</td><td>${a.symbol}</td>
             <td class="${["executed","dry-run"].includes(a.status) ? "up" : (a.status === "blocked" || a.status === "error" || a.status === "refused" ? "down" : "")}">${a.status}</td>
             <td class="hint">${(detail || "").slice(0, 120)}</td></tr>`;
         }).join("")}
